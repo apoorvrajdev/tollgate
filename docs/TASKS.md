@@ -36,7 +36,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | todo | - (ADR-0003 accepted) |
 | T-003 | Continuous integration | 0 | todo | T-001 |
 | T-002 | Tests for the commit guards | 0 | todo | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
-| T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-002 |
+| T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-001, T-003 |
 
 ---
 
@@ -137,7 +137,8 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 - **Goal:** a typed app factory, a response model for `/health`, and a committed OpenAPI snapshot that tests
   compare against (ADR-0005, part 1).
 - **Context:** `app/main.py`, `tests/test_health.py`, ADR-0004, ADR-0005, ARCHITECTURE §4.
-- **Depends on:** T-002 (delivery order), so CI and the required check are already in place.
+- **Depends on:** T-001, T-003 (the contract step is added to the check script from T-001 and to the workflow
+  from T-003). It is planned after T-002 but does not depend on it.
 - **Deliverables:** `app/main.py` with `create_app()` and a typed `/health` response; `tests/contract/`
   snapshot file and `tests/test_openapi_snapshot.py`; a documented, explicit way to regenerate the snapshot
   that tests never run; the contract test added to `scripts/check.py` as its own named step, mirrored as a
@@ -202,3 +203,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-09 | - | Bootstrap exception: pull request #1 (merge commit `711b73f`) merged with no CI and no independent review, because neither existed yet; the owner approved the scope in advance | PR #1; `gh pr checks 1` reported no checks |
 | 2026-11-09 | - | Decisions by the owner: ADR-0003 accepted; Phase 0 order is T-001, T-003, required check, T-002, T-004; the CI job is named exactly `lint and test`; `protect-main` stays strict with no bypass actors | `docs/DECISIONS.md`; `gh api repos/apoorvrajdev/tollgate/rulesets/26862192` showed `bypass_actors: []` and `current_user_can_bypass: never` |
 | 2026-11-09 | - | Known gap: T-001 merges with no CI at all, and T-003 merges before `lint and test` is a required check (its own run happens on the pull request, but the ruleset cannot require a check that has not run yet). Each pull request body says so; the local check is the gate until the owner sets the required check after T-003 | T-001 and T-003 pull requests, once opened |
+| 2026-11-09 | - | Bootstrap exception: pull request #2 (accept ADR-0003, reorder Phase 0) merged with no CI yet, after the owner's check; T-004 dependency set to T-001 and T-003 before the merge | PR #2; `gh pr checks 2` reported no checks |
