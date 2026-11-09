@@ -1,0 +1,3 @@
+#!/bin/sh
+# Owner authorship guard: rejects AI attribution in commit messages.
+exec node "$(dirname "$0")/check-commit-msg.mjs" "$1"
