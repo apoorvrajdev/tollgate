@@ -1,3 +1,33 @@
+# ============================================================
+# AI assistant files - NEVER committed (owner policy)
+# The pre-commit hook in .githooks/ also blocks these if force-added.
+# ============================================================
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+**/CLAUDE.md
+**/CLAUDE.local.md
+**/SKILL.md
+skills/
+.skills/
+ai-notes/
+# Other AI assistants' config, in case they are ever used
+.agents/
+AGENTS.md
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+
+# ============================================================
+# Secrets and local state
+# ============================================================
+.env.*
+!.env.example
+
+# ============================================================
+# Python template
+# ============================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
