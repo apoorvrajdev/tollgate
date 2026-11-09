@@ -2,6 +2,7 @@
 
 **A planned LLM gateway with token-aware rate limiting, model routing and semantic caching. Today only `GET /health` is built; the design, decisions and open questions are written down.**
 
+[![CI](https://github.com/apoorvrajdev/tollgate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/apoorvrajdev/tollgate/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -122,7 +123,7 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 - No CI runs yet, so every pull request so far has been merged without CI. The task log records these exceptions.
 - The commit guards run locally and need Node.js. They protect my own commits, and a clone without them has no such protection.
 - The pinned dependencies were generated on Windows. Whether every pin has a Linux wheel is unconfirmed until CI runs on Ubuntu (T-003).
-- The documented setup is Windows with Git Bash. Linux is unverified until T-003 runs CI on Ubuntu.
+- The documented setup is Windows with Git Bash. CI runs the checks on Ubuntu and passes.
 - Python 3.13 is the only supported version.
 
 ## Tech stack
@@ -137,7 +138,7 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 
 ## Run locally
 
-Requires a standard Windows Python 3.13 from python.org and Git Bash. Do not use the MSYS2 `python`: its platform is `mingw_x86_64_ucrt_gnu`, so pip finds no prebuilt wheels and tries to compile. `py -0p` lists the right one. Linux is unverified until T-003 runs CI on Ubuntu.
+Requires a standard Windows Python 3.13 from python.org and Git Bash. Do not use the MSYS2 `python`: its platform is `mingw_x86_64_ucrt_gnu`, so pip finds no prebuilt wheels and tries to compile. `py -0p` lists the right one. CI runs the checks on Ubuntu and passes.
 
 ```bash
 git clone https://github.com/apoorvrajdev/tollgate.git
