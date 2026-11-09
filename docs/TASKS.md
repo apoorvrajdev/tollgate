@@ -34,7 +34,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | --- | --- | --- | --- | --- |
 | T-000 | Project skeleton | 0 | done | - |
 | T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | done | - (ADR-0003 accepted) |
-| T-003 | Continuous integration | 0 | todo | T-001 |
+| T-003 | Continuous integration | 0 | done | T-001 |
 | T-002 | Tests for the commit guards | 0 | todo | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
 | T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-001, T-003 |
 
@@ -117,7 +117,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 
 ### T-003 - Continuous integration
 
-- **Status:** todo
+- **Status:** done (2026-11-09); criterion 4 (the owner's required-check step) follows the merge
 - **Goal:** the check command runs on every pull request and every push to `main`.
 - **Depends on:** T-001 only.
 - **Context:** ADR-0002, ADR-0003, `scripts/check.py`.
@@ -143,6 +143,19 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 - **Size:** about 50 lines. The required-check setting is a repository setting that only the owner changes.
   This PR cannot be gated by its own check, because the check does not exist as a required check until after
   the merge (see the Log).
+- **Result:** `.github/workflows/ci.yml`: workflow `ci`, one job (key `lint-and-test`, display name exactly
+  `lint and test`, which is the status-check context), ubuntu-latest, Python 3.13 with a pip cache keyed on both
+  requirements files, the four checks as separate steps named as in `scripts/check.py`, triggers on pull requests
+  and pushes to `main`, `contents: read`, `persist-credentials: false`, 10-minute timeout, pull-request runs
+  cancelled by a newer push and `main` runs never cancelled. The two actions are pinned by commit SHA with the
+  version in a comment (checkout v7.0.1, setup-python v7.1.0, resolved from their release tags), not by major tag.
+  The run triggered by the pull request (run `42670858105`) was green in 23 seconds. It installed every pin on
+  Linux from prebuilt wheels with `--only-binary=:all:`, including `ast_serialize` 0.13.1 and `librt` 0.16.0
+  (mypy dependencies) and `pydantic_core`, `mypy` and `ruff`; no source build ran. The runner image at that time
+  was Ubuntu 26.04 with Python 3.13.18. The first push to the branch failed with "Invalid workflow file": line 36
+  held an unquoted `run:` value containing `:all:` followed by a space, and a colon followed by a space inside an unquoted YAML value
+  reads as a nested mapping. The value is now quoted. The checker used before the first push compared strings and
+  did not parse YAML, so it missed this; it now flags any such value.
 
 ### T-004 - Typed app skeleton and OpenAPI snapshot
 
@@ -221,3 +234,5 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-09 | T-001 | Quirks worth knowing: a literal `assert 1 == 2` fails at the mypy step (strict `comparison-overlap`), not at pytest, so a planted test fault needs a non-literal assertion; `pip freeze` on Windows writes CRLF, so generated pin files are converted to LF before commit | Verifier fault table |
 | 2026-11-09 | - | Ruleset read-back for the README: `protect-main` is active on the default branch with the rules `deletion`, `non_fast_forward` and `pull_request` (0 required approvals, only the `merge` method allowed); no bypass actors. The repository also allows only merge commits and deletes merged branches | `gh api repos/apoorvrajdev/tollgate/rulesets/26862192` and `gh api repos/apoorvrajdev/tollgate`, read-only |
 | 2026-11-09 | - | Process change: the README was rewritten for a first-time reader, stating only what is merged and marking the rest as planned. The owner decided it is updated at the end of each phase. Merged without CI, like the earlier pull requests | README pull request (task: none) |
+| 2026-11-09 | T-003 | CI workflow added; verifier PASS on criteria 1 and 3 (steps, names and order equal `STEPS` in `scripts/check.py`; 11 mutations of the workflow caught by a line-based checker), reviewer APPROVE with three Minor findings; the pull request's own `lint and test` run is green and every pin installed from Linux wheels (criterion 2). Feedback iteration 1: the first push failed with "Invalid workflow file" on line 36 (unquoted `:all:` followed by a space in a `run:` value), fixed by quoting it. Criterion 4 is the owner's step after the merge: make `lint and test` a required status check in `protect-main`, with no bypass actors, then read it back; T-002 does not start before that | Runs `42670209879` (failed, invalid file) and `42670858105` (passed, 23 s); `gh pr checks 5` |
+| 2026-11-09 | T-003 | Worth knowing: validating YAML by comparing lines is not validating it; the first GitHub run is the real parse test, and a check that does not parse the file must say so. `ubuntu-latest` is a floating image, so a runner change could turn the required check red without any change here; the fallback is to pin `ubuntu-24.04`. The concurrency group has no workflow prefix, which is fine for one workflow; add `${{ github.workflow }}` if a second one appears. A `merge_group` trigger would be needed only if a merge queue is adopted | Run log of `42670858105`; reviewer findings |
