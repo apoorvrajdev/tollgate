@@ -2,6 +2,7 @@
 
 **A planned LLM gateway with token-aware rate limiting, model routing and semantic caching. Today only `GET /health` is built; the design, decisions and open questions are written down.**
 
+[![CI](https://github.com/apoorvrajdev/tollgate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/apoorvrajdev/tollgate/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -16,7 +17,7 @@
 | **Built today** | A FastAPI app with `GET /health`; a one-command check (lint, format, strict types, tests); local commit guards; architecture, decision and task documents |
 | **Planned** | Token-aware rate limiting (Phase 1), model routing (Phase 2), semantic caching (Phase 3), Docker Compose, observability and load benchmarks (Phase 4), demo and write-up (Phase 5) |
 | **Toolchain** | Python 3.13, FastAPI, ruff, mypy in strict mode, pytest |
-| **Delivery** | Pull requests only, protected `main`, merge commits. No CI yet (task T-003) |
+| **Delivery** | Pull requests only, protected `main`, merge commits. CI runs on every pull request and on pushes to `main`, and `lint and test` is a required check on `protect-main` |
 | **Results** | Not measured yet. See [Results](#results) |
 | **Licence** | MIT |
 
@@ -32,8 +33,9 @@
 | --- | --- |
 | `GET /health` on a FastAPI app | `/v1/chat/completions`, authentication, providers |
 | `python scripts/check.py`: ruff, ruff format, mypy strict, pytest | Rate limiter, router, semantic cache |
-| Commit guards in `.githooks/` (author identity, trailers, blocked files) | CI, the OpenAPI snapshot test, tests for the commit guards |
+| Commit guards in `.githooks/` (author identity, trailers, blocked files) | The OpenAPI snapshot test, tests for the commit guards |
 | `docs/`: architecture, decisions, tasks, setup | Redis, Docker, metrics, benchmarks |
+| CI: the `lint and test` job on every pull request and on pushes to `main`, a required check on `protect-main` | |
 
 ## The problem
 
@@ -106,7 +108,7 @@ Phases 1 to 5 are planned. Phase 0 is in progress. Details and acceptance criter
 
 | Phase | Scope | State |
 | --- | --- | --- |
-| 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000 and T-001 done; the rest todo |
+| 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000, T-001 and T-003 done; T-002 and T-004 todo |
 | 1 | Token-aware rate limiting: token counting, a token bucket on a shared store (Redis planned; an ADR decides the client), 429 with rate-limit headers, a mock provider, `/v1/chat/completions` | Planned |
 | 2 | Model routing: rules, fallback on provider failure, Ollama, then OpenAI and Anthropic adapters | Planned |
 | 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation, a minimal evaluation harness | Planned |
@@ -119,10 +121,10 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 
 - The gateway does not exist yet. There is no chat endpoint, no provider, no authentication and no rate limiting.
 - The OpenAI-compatible API and the provider order are Proposed decisions, not accepted ones.
-- No CI runs yet, so every pull request so far has been merged without CI. The task log records these exceptions.
+- Pull requests #1 to #4 were merged before CI existed, and #5 and #6 before `lint and test` was a required check; CI had passed on both. The task log records the exceptions for #1 to #6.
 - The commit guards run locally and need Node.js. They protect my own commits, and a clone without them has no such protection.
-- The pinned dependencies were generated on Windows. Whether every pin has a Linux wheel is unconfirmed until CI runs on Ubuntu (T-003).
-- The documented setup is Windows with Git Bash. Linux is unverified until T-003 runs CI on Ubuntu.
+- The pinned dependencies were generated on Windows. CI installs every pin from Linux wheels on Ubuntu.
+- The documented setup is Windows with Git Bash. CI runs the checks on Ubuntu and passes.
 - Python 3.13 is the only supported version.
 
 ## Tech stack
@@ -130,14 +132,14 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 | | Built today | Planned |
 | --- | --- | --- |
 | **Language and API** | Python 3.13, FastAPI 0.162.2, uvicorn 0.54.0 | OpenAI-compatible chat completions |
-| **Quality** | pytest 9.2.0, httpx 0.28.1, ruff 0.17.4, mypy 2.4.1 (strict) | CI on Python 3.13 |
+| **Quality** | pytest 9.2.0, httpx 0.28.1, ruff 0.17.4, mypy 2.4.1 (strict); CI on Python 3.13 in GitHub Actions | OpenAPI snapshot test (T-004) |
 | **Commit guards** | Node.js scripts in `.githooks/` | Tests for them (T-002) |
 | **State and providers** | None | Redis (pending the Phase 1 ADR); mock, Ollama, OpenAI and Anthropic adapters |
 | **Operations** | None | Docker Compose, metrics, structured logs (Phase 4) |
 
 ## Run locally
 
-Requires a standard Windows Python 3.13 from python.org and Git Bash. Do not use the MSYS2 `python`: its platform is `mingw_x86_64_ucrt_gnu`, so pip finds no prebuilt wheels and tries to compile. `py -0p` lists the right one. Linux is unverified until T-003 runs CI on Ubuntu.
+Requires a standard Windows Python 3.13 from python.org and Git Bash. Do not use the MSYS2 `python`: its platform is `mingw_x86_64_ucrt_gnu`, so pip finds no prebuilt wheels and tries to compile. `py -0p` lists the right one. CI runs the checks on Ubuntu and passes.
 
 ```bash
 git clone https://github.com/apoorvrajdev/tollgate.git
@@ -194,7 +196,7 @@ tollgate/
 - **Atomic Conventional Commits.** One logical change per commit, for example `docs(tasks): complete T-001`. Each branch is merged with a merge commit, so the individual commits stay in the history.
 - **One author, enforced locally.** Hooks check the author and committer email and reject attribution trailers in commit messages (ADR-0001).
 - **Task cards.** Work comes from [`docs/TASKS.md`](docs/TASKS.md). Each card has acceptance criteria that can be checked with evidence, and a task is marked done in the pull request that delivers it.
-- **CI is not in place yet.** Once T-003 lands, a `lint and test` job will run the same four checks, and I will make it a required check.
+- **CI is in place.** The `lint and test` job in GitHub Actions runs the same four checks as `scripts/check.py` on Ubuntu with Python 3.13, on every pull request and on pushes to `main`. It is a required check in the `protect-main` ruleset.
 
 ## Documentation
 
