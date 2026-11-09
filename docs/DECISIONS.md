@@ -9,7 +9,7 @@ Accepted decisions change only through a new ADR.
 | --- | --- | --- | --- |
 | [0001](#adr-0001) | Single-author repository with enforced commit identity | Accepted | 2026-11-09 |
 | [0002](#adr-0002) | Pull-request delivery flow | Accepted | 2026-11-09 |
-| [0003](#adr-0003) | Python toolchain, one check command, plain pip | Proposed | 2026-11-09 |
+| [0003](#adr-0003) | Python toolchain, one check command, plain pip | Accepted | 2026-11-09 |
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Proposed | 2026-11-09 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Proposed | 2026-11-09 |
 
@@ -54,14 +54,14 @@ It gets its own ADR before any limiter code is written.
 
 ## ADR-0003
 
-**Python toolchain, one check command, plain pip** · Proposed · 2026-11-09
+**Python toolchain, one check command, plain pip** · Accepted · 2026-11-09
 
 - **Context:** The default shell on the development machine resolves `python` to an MSYS2 build that pip treats
   as a non-Windows platform, so compiled dependencies such as pydantic-core fail to install. A standard
   Windows Python 3.13 is available through `py -3.13`.
 - **Options:** (a) ruff and mypy configured loosely; (b) ruff and mypy strict; (c) add `uv` or pip-tools for
   locking; (d) plain pip with pinned requirements files.
-- **Decision (proposed):** (b) and (d).
+- **Decision:** (b) and (d), accepted by the owner on 2026-11-09.
   - Python 3.13 only, locally and in CI.
   - `pyproject.toml` declares runtime dependencies and a `dev` group, and holds the ruff, mypy (strict) and
     pytest settings. `requirements.txt` (runtime) and `requirements-dev.txt` are pinned with exact versions.
