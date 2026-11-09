@@ -168,6 +168,31 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | 4 | Docker Compose, observability, reproducible load benchmarks |
 | 5 | Demo and write-up |
 
+### Requirements that carry into the task cards
+
+These are written into the cards when each phase is planned.
+
+- **Phase 1, Redis ADR first.** Before the Phase 1 ADR on how the rate limiter talks to Redis, the researcher
+  checks, with sources, that every package the Redis and Lua tests would need has a prebuilt wheel for Windows
+  (`win-amd64`) and Python 3.13, so it installs under ADR-0003's binary-only rule. No Redis package is added
+  before that ADR.
+- **Phase 1, acceptance.** The rate limiter has a test against a real Redis server in CI (for example a service
+  container). Until that test exists and is green, docs and PRs say only "unit-tested against fakeredis" and
+  make no claim about behaviour on real Redis.
+- **Phase 3, acceptance.** Semantic caching ships with a minimal eval harness: a small fixed set of prompt pairs
+  labelled same-meaning or different-meaning, a run that reports hit rate and wrong-hit rate at the chosen
+  similarity threshold, and the settings of the run. A threshold is never chosen without it.
+- **Phase 4, deployment ADR.** The deployment target (where and how the gateway runs beyond Docker Compose on a
+  development machine) is decided in a Phase 4 ADR, not before.
+
+## Backlog
+
+Not scheduled. Each item becomes a task card when a phase is planned.
+
+- **OpenAI SDK compatibility test:** run the official OpenAI Python SDK against the gateway with the mock
+  provider and check that chat completions work unchanged (ADR-0004). Streaming stays out of scope unless a
+  card adds it.
+
 ## Log
 
 | Date | Task | Event | Evidence |
