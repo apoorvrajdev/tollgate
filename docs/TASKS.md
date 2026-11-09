@@ -219,6 +219,10 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 - **OpenAI SDK compatibility test:** run the official OpenAI Python SDK against the gateway with the mock
   provider and check that chat completions work unchanged (ADR-0004). Streaming stays out of scope unless a
   card adds it.
+- **Dependabot for GitHub Actions SHA pins:** the workflow pins its actions by commit SHA, which is updated by
+  hand today. A Dependabot configuration for the `github-actions` ecosystem would propose those updates as pull
+  requests. It adds a configuration file to the repository, so it is a task of its own, with a check that the
+  proposed updates keep the version comment next to each SHA.
 
 ## Log
 
