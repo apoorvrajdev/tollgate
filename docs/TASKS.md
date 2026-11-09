@@ -33,7 +33,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
 | T-000 | Project skeleton | 0 | done | - |
-| T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | todo | - (ADR-0003 accepted) |
+| T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | done | - (ADR-0003 accepted) |
 | T-003 | Continuous integration | 0 | todo | T-001 |
 | T-002 | Tests for the commit guards | 0 | todo | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
 | T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-001, T-003 |
@@ -50,7 +50,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 
 ### T-001 - Toolchain: pyproject, pinned requirements, check script
 
-- **Status:** todo
+- **Status:** done (2026-11-09)
 - **Goal:** one command that lints, type-checks and tests the project the same way everywhere (ADR-0003).
 - **Context:** ADR-0003, ARCHITECTURE §6, `requirements.txt`, `app/`, `tests/`.
 - **Deliverables:**
@@ -72,6 +72,17 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 - **Branch and commits:** `build/t-001-toolchain`; `build: add pyproject and split pinned requirements`,
   `build(scripts): add check script`, `refactor(app): satisfy strict typing`, `docs(tasks): complete T-001`.
 - **Size:** about 120 lines.
+- **Result:** `pyproject.toml` (project metadata, `requires-python = "==3.13.*"`, runtime dependencies, a `dev`
+  extra in `[project.optional-dependencies]` rather than a PEP 735 group so older pip can read it, settings for
+  pytest, mypy strict and ruff; not installable, no build system). `requirements.txt` holds 14 runtime pins
+  (fastapi 0.162.2, uvicorn 0.54.0 and their dependencies); `requirements-dev.txt` adds 15 (httpx, pytest, ruff
+  0.17.4, mypy 2.4.1 and their dependencies). `redis` and `fakeredis` were dropped by the owner's decision: nothing
+  imports them, and the Phase 1 ADR decides the Redis client. `scripts/check.py` runs the four steps with the
+  interpreter that runs it and stops at the first failure. `[tool.ruff.format]` excludes `*.md`, because ruff
+  0.17 also formats code blocks in Markdown and `docs/ARCHITECTURE.md` holds illustrative snippets. The pins were
+  generated on Windows only; whether `ast_serialize` and `librt` (mypy dependencies) have Linux wheels at these
+  versions is checked by the first CI run (T-003). `pytest` prints a Starlette deprecation warning about
+  `httpx` in `TestClient`; it is not a failure.
 
 ### T-002 - Tests for the commit guards
 
@@ -124,7 +135,9 @@ T-004. The rows below are in that order; the cards further down are listed by ID
   4. After the merge, the owner makes `lint and test` a required status check in the `protect-main` ruleset,
      with no bypass actors, and confirms it (OWNER-CHECK). T-002 does not start before that.
 - **Verification:** `gh pr checks <n> --watch`; the workflow compared line by line with `check.py`; after the
-  merge, the ruleset read back with `gh api repos/apoorvrajdev/tollgate/rulesets/<id>`.
+  merge, the ruleset read back with `gh api repos/apoorvrajdev/tollgate/rulesets/<id>`. The first run must show
+  that every pin in both requirements files installs on ubuntu-latest with `--only-binary=:all:` (T-001 generated
+  them on Windows); if one has no Linux wheel, the pins are regenerated per `docs/setup.md`.
 - **Branch and commits:** `ci/t-003-workflow`; `ci: run lint, types and tests on every pull request`,
   `docs(tasks): complete T-003`.
 - **Size:** about 50 lines. The required-check setting is a repository setting that only the owner changes.
@@ -204,3 +217,5 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-09 | - | Decisions by the owner: ADR-0003 accepted; Phase 0 order is T-001, T-003, required check, T-002, T-004; the CI job is named exactly `lint and test`; `protect-main` stays strict with no bypass actors | `docs/DECISIONS.md`; `gh api repos/apoorvrajdev/tollgate/rulesets/26862192` showed `bypass_actors: []` and `current_user_can_bypass: never` |
 | 2026-11-09 | - | Known gap: T-001 merges with no CI at all, and T-003 merges before `lint and test` is a required check (its own run happens on the pull request, but the ruleset cannot require a check that has not run yet). Each pull request body says so; the local check is the gate until the owner sets the required check after T-003 | T-001 and T-003 pull requests, once opened |
 | 2026-11-09 | - | Bootstrap exception: pull request #2 (accept ADR-0003, reorder Phase 0) merged with no CI yet, after the owner's check; T-004 dependency set to T-001 and T-003 before the merge | PR #2; `gh pr checks 2` reported no checks |
+| 2026-11-09 | T-001 | Toolchain added; verifier PASS (fresh `py -3.13` venv installed both files with no source builds; baseline plus lint, format, type and test faults each exited non-zero naming the step; a combined fault stopped at the first step; three mutations of the script and config all caught), reviewer APPROVE with four Minor findings (all recorded or accepted, none changing behaviour); no CI exists yet, so the local check was the gate | `python scripts/check.py` passed just now (ruff, format, mypy strict on 5 files, 1 test); `pip check` clean; runtime file holds none of pytest, ruff, mypy, httpx, redis, fakeredis |
+| 2026-11-09 | T-001 | Quirks worth knowing: a literal `assert 1 == 2` fails at the mypy step (strict `comparison-overlap`), not at pytest, so a planted test fault needs a non-literal assertion; `pip freeze` on Windows writes CRLF, so generated pin files are converted to LF before commit | Verifier fault table |
