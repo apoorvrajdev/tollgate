@@ -6,18 +6,18 @@ Documentation: [setup](docs/setup.md) · [architecture](docs/ARCHITECTURE.md) ·
 
 ## Setup (Windows, Git Bash)
 
-Requires a standard Windows Python 3.12 or 3.13 from python.org (not the MSYS2/MinGW one, which has no prebuilt wheels for pydantic-core).
+Requires a standard Windows Python 3.13 from python.org (not the MSYS2/MinGW one, which has no prebuilt wheels for pydantic-core).
 
 ```bash
 py -3.13 -m venv .venv
 source .venv/Scripts/activate
-pip install -r requirements.txt
+pip install --only-binary=:all: -r requirements-dev.txt
 ```
 
-Run the tests:
+Run the checks (lint, format, types, tests):
 
 ```bash
-python -m pytest
+python scripts/check.py
 ```
 
 Run the server and check health:
