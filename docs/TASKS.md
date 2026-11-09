@@ -17,22 +17,26 @@ No gateway features yet.
 **Gate (owner signs off):**
 
 - [ ] `python scripts/check.py` is green locally and in CI (lint, format, mypy strict, tests)
+- [ ] CI runs on Python 3.13 for every pull request and push to `main`, in a job named exactly `lint and test`
+- [ ] `lint and test` is a required status check in the `protect-main` ruleset, which keeps no bypass actors
 - [ ] The commit guards are covered by tests, and those tests passed a mutation check
-- [ ] CI runs on Python 3.13 for every pull request and push to `main`
-- [ ] The OpenAPI snapshot test is in place
-- [ ] ADR-0003, ADR-0004 and ADR-0005 accepted or revised
+- [ ] The OpenAPI snapshot test is in place and runs as part of `scripts/check.py`
+- [ ] ADR-0004 and ADR-0005 accepted or revised (ADR-0003 accepted 2026-11-09)
 - [ ] Every commit is authored by the owner, with no co-author trailers; merge commits created by GitHub may
       show GitHub as committer
 
 ## Board
 
+Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
+T-004. The rows below are in that order; the cards further down are listed by ID.
+
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
 | T-000 | Project skeleton | 0 | done | - |
-| T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | todo | ADR-0003 accepted |
-| T-002 | Tests for the commit guards | 0 | todo | T-001 |
-| T-003 | Continuous integration | 0 | todo | T-001, T-002 |
-| T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-001 |
+| T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | todo | - (ADR-0003 accepted) |
+| T-003 | Continuous integration | 0 | todo | T-001 |
+| T-002 | Tests for the commit guards | 0 | todo | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
+| T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-002 |
 
 ---
 
@@ -74,9 +78,12 @@ No gateway features yet.
 - **Status:** todo
 - **Goal:** prove the guards in `.githooks/` behave as intended (the hooks are owner-managed and not edited).
 - **Context:** `.githooks/check-commit-msg.mjs`, `.githooks/check-pre-commit.mjs`, ADR-0001.
-- **Deliverables:** `tests/test_hooks.py`, running each guard as a child process with `subprocess` (no shell, a
-  temporary directory as working directory, pre-commit in its `--files` mode, so no test calls git or touches
-  the repository).
+- **Deliverables:**
+  - `tests/test_hooks.py`, running each guard as a child process with `subprocess` (no shell, a temporary
+    directory as working directory, pre-commit in its `--files` mode, so no test calls git or touches the
+    repository).
+  - `.github/workflows/ci.yml`: a Node.js setup step added before the checks, inside the existing job. The job
+    name stays exactly `lint and test`.
 - **Acceptance criteria:**
   1. `check-commit-msg.mjs` exits 1 for one sample of every forbidden pattern it defines, and 0 for three normal
      Conventional Commits messages, one of which names a tool in plain prose.
@@ -88,29 +95,41 @@ No gateway features yet.
      pattern, a loosened anchor, an inverted exit code, a dropped path rule, a case-sensitive match) and the
      tests catch every one.
   5. If Node.js is missing, the tests fail with a clear message instead of passing.
-- **Verification:** `python scripts/check.py` green, run 10 times in a row; the mutation table.
+  6. On the task's pull request, `lint and test` is green with the Node step in place, and it is already a
+     required check, so the merge is gated by it.
+- **Verification:** `python scripts/check.py` green, run 10 times in a row; the mutation table; `gh pr checks
+  <n> --watch`.
 - **Branch and commits:** `test/t-002-commit-guards`; `test(hooks): cover the commit-message guard`,
-  `test(hooks): cover the pre-commit guard`, `docs(tasks): complete T-002`.
-- **Size:** about 150 lines of tests.
+  `test(hooks): cover the pre-commit guard`, `ci: set up Node.js for the hook tests`,
+  `docs(tasks): complete T-002`.
+- **Size:** about 150 lines of tests plus a few workflow lines.
 
 ### T-003 - Continuous integration
 
 - **Status:** todo
 - **Goal:** the check command runs on every pull request and every push to `main`.
+- **Depends on:** T-001 only.
 - **Context:** ADR-0002, ADR-0003, `scripts/check.py`.
-- **Deliverables:** `.github/workflows/ci.yml`: ubuntu-latest, Python 3.13 with a pip cache, Node.js (for the
-  hook tests), install both requirements files, then the check steps as separate steps so a failure names its
-  step. Permissions `contents: read`; `persist-credentials: false`; cancel superseded pull-request runs; current
-  major versions of the actions, looked up rather than assumed.
+- **Deliverables:** `.github/workflows/ci.yml` with one job named exactly `lint and test` (the name is what the
+  `protect-main` ruleset matches): ubuntu-latest, Python 3.13 with a pip cache, install both requirements files
+  with `--only-binary=:all:`, then the check steps as separate steps so a failure names its step. No Node.js
+  yet; T-002 adds it. Permissions `contents: read`; `persist-credentials: false`; cancel superseded
+  pull-request runs; current major versions of the actions, looked up rather than assumed.
 - **Acceptance criteria:**
-  1. The workflow file is valid YAML and runs the same steps in the same order as `scripts/check.py`.
+  1. The workflow file is valid YAML, the job is named exactly `lint and test`, and it runs the same steps in
+     the same order as `scripts/check.py`.
   2. On the task's pull request, the run triggered by the `pull_request` event is green (`gh pr checks <n>`)
      before merge.
   3. No secret and no paid API is used by the workflow.
-- **Verification:** `gh pr checks <n> --watch`; the workflow compared line by line with `check.py`.
+  4. After the merge, the owner makes `lint and test` a required status check in the `protect-main` ruleset,
+     with no bypass actors, and confirms it (OWNER-CHECK). T-002 does not start before that.
+- **Verification:** `gh pr checks <n> --watch`; the workflow compared line by line with `check.py`; after the
+  merge, the ruleset read back with `gh api repos/apoorvrajdev/tollgate/rulesets/<id>`.
 - **Branch and commits:** `ci/t-003-workflow`; `ci: run lint, types and tests on every pull request`,
   `docs(tasks): complete T-003`.
-- **Size:** about 50 lines. Making the job a required status check is a repository setting for the owner.
+- **Size:** about 50 lines. The required-check setting is a repository setting that only the owner changes.
+  This PR cannot be gated by its own check, because the check does not exist as a required check until after
+  the merge (see the Log).
 
 ### T-004 - Typed app skeleton and OpenAPI snapshot
 
@@ -118,18 +137,23 @@ No gateway features yet.
 - **Goal:** a typed app factory, a response model for `/health`, and a committed OpenAPI snapshot that tests
   compare against (ADR-0005, part 1).
 - **Context:** `app/main.py`, `tests/test_health.py`, ADR-0004, ADR-0005, ARCHITECTURE §4.
+- **Depends on:** T-002 (delivery order), so CI and the required check are already in place.
 - **Deliverables:** `app/main.py` with `create_app()` and a typed `/health` response; `tests/contract/`
   snapshot file and `tests/test_openapi_snapshot.py`; a documented, explicit way to regenerate the snapshot
-  that tests never run.
+  that tests never run; the contract test added to `scripts/check.py` as its own named step, mirrored as a
+  separate step in `.github/workflows/ci.yml` inside the job `lint and test` (the job name does not change).
 - **Acceptance criteria:**
   1. `/health` still returns `{"status": "ok"}` with 200, and the response model appears in the OpenAPI document.
   2. The snapshot test passes, and fails when a route, field or status code changes in a scratch copy.
   3. Tests never write the snapshot; only the explicit regenerate command does.
   4. Mutation check: at least three mutations of `app/` (renamed field, removed route, changed status code) are
      caught.
-- **Verification:** `python scripts/check.py` green; the mutation table.
+  5. `python scripts/check.py` runs the contract test as a named step, and CI runs the same step; a planted
+     snapshot difference makes both fail at that step.
+- **Verification:** `python scripts/check.py` green; the mutation table; `gh pr checks <n> --watch`.
 - **Branch and commits:** `feat/t-004-openapi-snapshot`; `refactor(app): add app factory and typed health
-  response`, `test(contract): add OpenAPI snapshot test`, `docs(tasks): complete T-004`.
+  response`, `test(contract): add OpenAPI snapshot test`, `ci: run the contract test in CI`,
+  `docs(tasks): complete T-004`.
 - **Size:** about 80 lines plus the generated snapshot.
 
 ---
