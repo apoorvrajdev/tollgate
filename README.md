@@ -121,7 +121,7 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 
 - The gateway does not exist yet. There is no chat endpoint, no provider, no authentication and no rate limiting.
 - The OpenAI-compatible API and the provider order are Proposed decisions, not accepted ones.
-- Pull requests #1 to #4 were merged before CI existed, and #5, which added it, before `lint and test` was a required check. The task log records the exceptions for #1 to #5.
+- Pull requests #1 to #4 were merged before CI existed, and #5 and #6 before `lint and test` was a required check; CI had passed on both. The task log records the exceptions for #1 to #6.
 - The commit guards run locally and need Node.js. They protect my own commits, and a clone without them has no such protection.
 - The pinned dependencies were generated on Windows. CI installs every pin from Linux wheels on Ubuntu.
 - The documented setup is Windows with Git Bash. CI runs the checks on Ubuntu and passes.
