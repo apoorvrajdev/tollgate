@@ -1,0 +1,3 @@
+#!/bin/sh
+# Owner authorship guard: checks author/committer identity and blocks AI assistant files.
+exec node "$(dirname "$0")/check-pre-commit.mjs"
