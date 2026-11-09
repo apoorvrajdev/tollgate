@@ -1,7 +1,7 @@
 # Setup
 
-How to get the project running on a Windows development machine with Git Bash. Until task T-001 lands, the
-commands below are the whole workflow; T-001 adds `python scripts/check.py` as the single check command.
+How to get the project running on a Windows development machine with Git Bash. `python scripts/check.py` is the
+single check command (ADR-0003).
 
 ## Prerequisites
 
@@ -23,19 +23,49 @@ git clone https://github.com/apoorvrajdev/tollgate.git
 cd tollgate
 py -3.13 -m venv .venv
 source .venv/Scripts/activate
-python -m pip install --only-binary=:all: -r requirements.txt
+python -m pip install --only-binary=:all: -r requirements-dev.txt
 ```
 
-`--only-binary=:all:` makes pip fail instead of compiling from source if a wheel is missing. After activation,
-`python` is the venv's Python. Without activating, call `.venv/Scripts/python` explicitly.
+`requirements.txt` holds the runtime packages (what the gateway needs to run). `requirements-dev.txt` adds the
+test and lint tools and includes the runtime file. `--only-binary=:all:` makes pip fail instead of compiling from
+source if a wheel is missing. After activation, `python` is the venv's Python. Without activating, call
+`.venv/Scripts/python` explicitly.
 
-## Run and test
+The project is run from the repository root and is not installed as a package (there is no build step), so
+`pip install .` does not apply.
+
+## Run and check
 
 ```bash
-python -m pytest
+python scripts/check.py
 uvicorn app.main:app --reload
 curl localhost:8000/health   # {"status":"ok"}
 ```
+
+`scripts/check.py` runs four steps in order and stops at the first failure, naming it:
+
+| Step | Command it runs |
+| --- | --- |
+| 1 | `ruff check .` |
+| 2 | `ruff format --check .` |
+| 3 | `mypy` (strict; paths come from `pyproject.toml`) |
+| 4 | `pytest` |
+
+Run it before every commit. To fix formatting, run `python -m ruff format .`.
+
+## Updating pins
+
+Pins are exact and updated by hand, one task at a time. Use throwaway venvs, not the project one:
+
+1. In a new venv, install the runtime packages (`fastapi`, `uvicorn`) with `--only-binary=:all:`, run
+   `pip freeze`, and write the result to `requirements.txt` under its two comment lines.
+2. In a second new venv, install the new `requirements.txt`, then `httpx`, `pytest`, `ruff` and `mypy`, run
+   `pip freeze`, and put every line that is not in the runtime freeze into `requirements-dev.txt`, after
+   `-r requirements.txt`.
+3. If a dev tool forces a different version of a runtime package, regenerate the runtime pins at that version so
+   both files agree. Run `pip check` in both venvs, then `python scripts/check.py`.
+
+The lower bounds in `pyproject.toml` are not checked against the pins; keep them in step by hand.
 
 ## Enable the commit hooks
 
