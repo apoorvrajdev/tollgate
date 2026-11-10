@@ -68,7 +68,7 @@ _ACCEPTED = {
     "plain": "feat(limits): add a token bucket",
     "tool_named_in_prose": f"docs(readme): explain how to install the {_VENDOR.title()} CLI",
     "body_with_scope": "fix(cache): evict stale keys\n\nKeys older than the window are dropped.\n",
-    "comment_line_ignored": f"fix: x\n\n# {_COAUTHOR}: a",
+    "comment_line_ignored": f"fix: x\n\n# noreply@{_MAKER}.com",
     "midline_mention_ignored": f"docs: ban the {_COAUTHOR}: trailer",
 }
 
@@ -116,12 +116,21 @@ _BLOCKED = {
     "ai_notes-root": "ai-notes/log.md",
     "ai_notes-sub": "pkg/ai-notes/log.md",
     "ai_notes-backslash": "pkg\\ai-notes\\log.md",
+    "claude_dir-uppercase": f".{_UPPER}/x",
+    "skill_md-uppercase": "SKILL.MD",
+    "skills_dir-uppercase": "Skills/a.md",
+    "ai_notes-uppercase": "AI-NOTES/x.md",
 }
 _ALLOWED = {
     "app_main": "app/main.py",
     "readme": "README.md",
     "tasks_doc": "docs/TASKS.md",
     "lookalike_names": f"my-{_VENDOR}-notes.md",
+    "prefixed_claude_md": f"my{_UPPER}.md",
+    "prefixed_claude_dir": f"x.{_VENDOR}/a",
+    "prefixed_skill_md": "mySKILL.md",
+    "prefixed_skills_dir": "myskills/a.md",
+    "prefixed_ai_notes": "notai-notes/x.md",
 }
 
 
