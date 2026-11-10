@@ -96,6 +96,62 @@ def test_commit_msg_without_a_file_argument_exits_2(node: str, tmp_path: Path) -
     assert result.returncode == 2
 
 
+_UPPER = _VENDOR.upper()
+_BLOCKED = {
+    "claude_md-root": f"{_UPPER}.md",
+    "claude_md-sub": f"docs/{_UPPER}.md",
+    "claude_md-backslash": f"docs\\sub\\{_UPPER}.md",
+    "claude_md-lowercase": f"{_VENDOR}.md",
+    "claude_md-local": f"{_UPPER}.local.md",
+    "claude_dir-root": f".{_VENDOR}/settings.json",
+    "claude_dir-sub": f"tools/.{_VENDOR}/agents/x.md",
+    "claude_dir-backslash": f"tools\\.{_VENDOR}\\x.md",
+    "skill_md-root": "SKILL.md",
+    "skill_md-sub": "pkg/SKILL.md",
+    "skill_md-backslash": "pkg\\SKILL.md",
+    "skills_dir-root": "skills/a.md",
+    "skills_dir-sub": "pkg/skills/a.md",
+    "skills_dir-backslash": "pkg\\skills\\a.md",
+    "skills_dir-dotted": ".skills/a.md",
+    "ai_notes-root": "ai-notes/log.md",
+    "ai_notes-sub": "pkg/ai-notes/log.md",
+    "ai_notes-backslash": "pkg\\ai-notes\\log.md",
+}
+_ALLOWED = {
+    "app_main": "app/main.py",
+    "readme": "README.md",
+    "tasks_doc": "docs/TASKS.md",
+    "lookalike_names": f"my-{_VENDOR}-notes.md",
+}
+
+
+@pytest.mark.parametrize("path", list(_BLOCKED.values()), ids=list(_BLOCKED))
+def test_pre_commit_blocks_path(node: str, tmp_path: Path, path: str) -> None:
+    result = _run(node, "check-pre-commit.mjs", ["--files", path], tmp_path)
+
+    assert result.returncode == 1
+    assert "Commit rejected" in result.stderr
+    assert path in result.stderr
+
+
+@pytest.mark.parametrize("path", list(_ALLOWED.values()), ids=list(_ALLOWED))
+def test_pre_commit_allows_path(node: str, tmp_path: Path, path: str) -> None:
+    result = _run(node, "check-pre-commit.mjs", ["--files", path], tmp_path)
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_pre_commit_blocks_when_one_of_several_paths_is_blocked(node: str, tmp_path: Path) -> None:
+    paths = ["app/main.py", "ai-notes/x.md"]
+
+    result = _run(node, "check-pre-commit.mjs", ["--files", *paths], tmp_path)
+
+    assert result.returncode == 1
+    assert "ai-notes/x.md" in result.stderr
+    assert "app/main.py" not in result.stderr
+
+
 def test_missing_node_fails_instead_of_skipping(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: None)
 
