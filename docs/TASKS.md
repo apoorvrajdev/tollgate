@@ -35,7 +35,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | T-000 | Project skeleton | 0 | done | - |
 | T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | done | - (ADR-0003 accepted) |
 | T-003 | Continuous integration | 0 | done | T-001 |
-| T-002 | Tests for the commit guards | 0 | todo | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
+| T-002 | Tests for the commit guards | 0 | done | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
 | T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-001, T-003 |
 
 ---
@@ -86,7 +86,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 
 ### T-002 - Tests for the commit guards
 
-- **Status:** todo
+- **Status:** done
 - **Goal:** prove the guards in `.githooks/` behave as intended (the hooks are owner-managed and not edited).
 - **Context:** `.githooks/check-commit-msg.mjs`, `.githooks/check-pre-commit.mjs`, ADR-0001.
 - **Deliverables:**
@@ -114,6 +114,14 @@ T-004. The rows below are in that order; the cards further down are listed by ID
   `test(hooks): cover the pre-commit guard`, `ci: set up Node.js for the hook tests`,
   `docs(tasks): complete T-002`.
 - **Size:** about 150 lines of tests plus a few workflow lines.
+- **Result:** `tests/test_hooks.py` (168 lines, 49 tests) runs both guards as Node child processes with no shell
+  and a temporary working directory; the pre-commit guard runs in `--files` mode, so no test calls git. Vendor
+  names are built from fragments. A missing `node` fails the session fixture with a clear message rather than
+  skipping, and one test proves that path. Beyond the card it also covers uppercase variants of every pattern and
+  rule, prefixed lookalike paths that must pass, a comment line and a mid-line mention that must pass, a missing
+  argument (exit 2) and a mixed list of paths. `.github/workflows/ci.yml` gained a `Set up Node.js` step
+  (`actions/setup-node` v7.1.0, pinned by SHA, Node 26) before the checks; the job name is unchanged. Local Node
+  is 24.12.0, so Node 26 is first exercised by the pull request's run (criterion 6).
 
 ### T-003 - Continuous integration
 
@@ -242,3 +250,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-09 | T-003 | Worth knowing: validating YAML by comparing lines is not validating it; the first GitHub run is the real parse test, and a check that does not parse the file must say so. `ubuntu-latest` is a floating image, so a runner change could turn the required check red without any change here; the fallback is to pin `ubuntu-24.04`. The concurrency group has no workflow prefix, which is fine for one workflow; add `${{ github.workflow }}` if a second one appears. A `merge_group` trigger would be needed only if a merge queue is adopted | Run log of `42670858105`; reviewer findings |
 | 2026-11-10 | T-003 | Criterion 4 complete: the owner made `lint and test` a required status check in `protect-main`. Read back by id: the required check is `lint and test` from GitHub Actions (integration id 15368, which the apps API names `github-actions`); `bypass_actors` is empty and `current_user_can_bypass` is `never`; the `pull_request` rule is present with 0 required approvals and merge commits as the only allowed method; `non_fast_forward` blocks force pushes and `deletion` blocks deletion. `strict_required_status_checks_policy` is false, so a pull request need not be up to date with `main` to merge. The dependency of T-002 on the required check is met | `gh api repos/apoorvrajdev/tollgate/rulesets/26862192` (ruleset updated 2026-11-10 00:21 +05:30) and `gh api apps/github-actions`; the `lint and test` check run on `main` commit `1be7c61` came from app 15368 and succeeded |
 | 2026-11-09 | - | Exception: pull request #6 (a backlog-only docs change, the Dependabot item) was merged at 18:50:21Z by the owner, before `lint and test` became a required check (the ruleset was saved at 18:51:45Z). CI had passed on it first. Like #5, it was merged before the check was required, and unlike #1 to #4 it had CI | PR #6 merge time from `gh pr view 6`; CI run `42676255873` (success); ruleset `updated_at` 2026-11-10T00:21:45+05:30 |
+| 2026-11-10 | T-002 | Guard tests added; `scripts/check.py` passed 10 runs in a row (50 tests). Mutation check: 30 mutations of scratch copies of the hooks (each pattern or rule removed, `/i` dropped, anchors loosened or removed, comment skip removed, exit codes inverted, backslash normalisation removed); the first round left 10 survivors (comment skip, five loosened anchors, four dropped `/i` on path rules), closed by samples in a second round, after which all 30 were caught. Run with `node` off PATH, 39 tests error with the Node.js message and none skip. Reviewer APPROVE with three Minor findings | Verifier tables, two rounds; the pull request's `lint and test` run (criterion 6) is recorded in the pull request |
