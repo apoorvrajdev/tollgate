@@ -30,10 +30,34 @@ def test_live_openapi_matches_snapshot() -> None:
     assert not differs(load_snapshot(), create_app().openapi()), REGENERATE_HINT
 
 
+def is_canonical(text: str) -> bool:
+    """True for sorted keys, indent 2, LF line endings and a final newline."""
+    canonical = json.dumps(json.loads(text), indent=2, sort_keys=True, ensure_ascii=False)
+    return text == canonical + "\n"
+
+
 def test_snapshot_file_is_canonical_lf_text() -> None:
-    text = SNAPSHOT_PATH.read_bytes().decode("utf-8").replace("\r\n", "\n")
-    canonical = json.dumps(load_snapshot(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-    assert text == canonical
+    assert is_canonical(SNAPSHOT_PATH.read_bytes().decode("utf-8"))
+
+
+def test_is_canonical_accepts_canonical_text() -> None:
+    assert is_canonical('{\n  "a": 1,\n  "b": 2\n}\n')
+
+
+def test_is_canonical_rejects_wrong_indent() -> None:
+    assert not is_canonical('{\n    "a": 1\n}\n')
+
+
+def test_is_canonical_rejects_unsorted_keys() -> None:
+    assert not is_canonical('{\n  "b": 2,\n  "a": 1\n}\n')
+
+
+def test_is_canonical_rejects_crlf_line_endings() -> None:
+    assert not is_canonical('{\r\n  "a": 1\r\n}\r\n')
+
+
+def test_is_canonical_rejects_missing_trailing_newline() -> None:
+    assert not is_canonical('{\n  "a": 1\n}')
 
 
 def test_comparison_detects_removed_route() -> None:
