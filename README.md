@@ -156,12 +156,13 @@ curl localhost:8000/health   # {"status":"ok"}
 
 ## Checks
 
-`python scripts/check.py` runs four steps in order, stops at the first failure and names it:
+`python scripts/check.py` runs five steps in order, stops at the first failure and names it:
 
 1. `ruff check .`
 2. `ruff format --check .`
 3. `mypy` (strict)
-4. `pytest`
+4. `contract` (the live OpenAPI document must equal the committed snapshot)
+5. `pytest` (every other test)
 
 ## Repository layout
 
@@ -196,7 +197,7 @@ tollgate/
 - **Atomic Conventional Commits.** One logical change per commit, for example `docs(tasks): complete T-001`. Each branch is merged with a merge commit, so the individual commits stay in the history.
 - **One author, enforced locally.** Hooks check the author and committer email and reject attribution trailers in commit messages (ADR-0001).
 - **Task cards.** Work comes from [`docs/TASKS.md`](docs/TASKS.md). Each card has acceptance criteria that can be checked with evidence, and a task is marked done in the pull request that delivers it.
-- **CI is in place.** The `lint and test` job in GitHub Actions runs the same four checks as `scripts/check.py` on Ubuntu with Python 3.13, on every pull request and on pushes to `main`. It is a required check in the `protect-main` ruleset.
+- **CI is in place.** The `lint and test` job in GitHub Actions runs the same five checks as `scripts/check.py` on Ubuntu with Python 3.13, on every pull request and on pushes to `main`. It is a required check in the `protect-main` ruleset.
 
 ## Documentation
 
