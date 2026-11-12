@@ -12,9 +12,11 @@ Accepted decisions change only through a new ADR.
 | [0003](#adr-0003) | Python toolchain, one check command, plain pip | Accepted | 2026-11-09 |
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
+| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Proposed | 2026-11-12 |
+| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Proposed | 2026-11-12 |
+| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Proposed | 2026-11-12 |
 
-Open decision for Phase 1: how the rate limiter talks to Redis (client library, Lua scripts, test double).
-It gets its own ADR before any limiter code is written.
+ADR-0006 must be accepted before any Redis package is added or any limiter code that uses Redis is written.
 
 ---
 
@@ -102,6 +104,151 @@ It gets its own ADR before any limiter code is written.
   3. **Evidence-first numbers.** Any figure in a README, doc or PR comes from a recorded run with its settings.
 - **Consequences:** Slower task delivery, in exchange for tests that are known to detect real breakage. A
   deliberate API change needs a visible snapshot diff in review.
+
+## ADR-0006
+
+**Redis client, Lua token bucket and how it is tested** · Proposed · 2026-11-12
+
+- **Context:** The rate limiter keeps one bucket per API key, shared by every gateway instance, and each
+  reservation must read, refill and update the bucket in one atomic step. ADR-0003 allows only packages with
+  prebuilt wheels for Windows (`win-amd64`) and Python 3.13. Tests have no network access, and time is injected
+  through a `Clock`. Facts checked on 2026-11-12 from the PyPI JSON API, the redis-py v8.1.0 source and redis.io:
+  - `redis` (redis-py) 8.1.0, released 2026-07-30, MIT, a pure-Python `py3-none-any` wheel, ships `py.typed`
+    (the `types-redis` stubs are obsolete since redis-py 5). `redis.asyncio.Redis.register_script` returns a
+    script object that sends EVALSHA and, on a NOSCRIPT error, loads the script and retries once. Script
+    results are typed `Any`.
+  - `fakeredis` 2.40.0, released 2026-10-14, BSD-3-Clause, `py3-none-any`, has `FakeAsyncRedis`. Lua scripting
+    needs its `lua` extra, which installs `lupa`. `lupa` 2.8 (2026-04-15, MIT-style licence) has
+    `cp313-cp313-win_amd64` and `cp313-cp313-manylinux` x86_64 wheels. fakeredis reads `time.time()` for its
+    `TIME` command and for key expiry, so a fake clock cannot control either.
+  - Redis runs a script atomically, blocking other commands. Lua numbers are returned as integers with the
+    fraction dropped, so fractional values must be returned as strings. Every key a script touches must be
+    passed in `KEYS`.
+  - GitHub Actions can run Redis as a service container, on Linux runners only. The job already uses
+    `ubuntu-latest`. Official image tags include `7.4.12` and `8.10.3`.
+- **Options:**
+  - (a) redis-py's asyncio client, the bucket as a Lua script; unit tests on fakeredis with Lua; one CI step
+    against a real Redis service container.
+  - (b) Same client, but a WATCH/MULTI transaction in Python instead of Lua. Retries under contention, more
+    round trips, and fakeredis's transaction emulation would be what the unit tests prove.
+  - (c) An in-house fake instead of fakeredis. No dependency, but it cannot run Lua, so the unit tests would
+    test a Python copy of the script, not the script.
+  - (d) `coredis` (MIT, fully typed). Its compiled parts have no `win_amd64` wheel; the pure-Python fallback
+    is unverified here.
+- **Decision (proposed):** (a).
+  - Runtime dependency: `redis==8.1.0`, without the optional `hiredis` extra. Dev dependencies:
+    `fakeredis[lua]==2.40.0`, which brings `lupa==2.8`. Each is pinned exactly when the task that needs it adds
+    it, and the install must pass with `--only-binary=:all:` on Windows and in CI.
+  - The bucket update is one Lua script, loaded through `register_script`. The script never calls `TIME`: the
+    caller passes the current time in milliseconds from the injected `Clock` as an argument. The script sets
+    `PEXPIRE` on the bucket key so idle buckets disappear, and returns the fractional balance as a string.
+  - Script results are converted to typed values in one adapter module, so `Any` does not spread under mypy
+    strict.
+  - Bucket keys never contain an API key. They use a prefix and a SHA-256 digest of the key.
+  - Unit tests run the real Lua script on `FakeAsyncRedis`. One shared behaviour suite runs against every
+    limiter implementation (in-memory, fakeredis, real Redis).
+  - The real-Redis tests carry a registered pytest marker, `redis_server`. The default pytest options deselect
+    that marker, so `scripts/check.py` and local runs stay network-free; nothing is skipped. CI adds a separate
+    step, `redis integration`, after the `check.py` mirror steps. It runs only those tests against a
+    `redis:7.4.12` service container on `localhost`. That localhost container is the one exception to "no
+    network in tests", and it exists only in CI.
+  - Until that CI step is green, docs and pull requests say only "unit-tested against fakeredis" (TASKS.md
+    Phase 1 requirement).
+- **Consequences:**
+  - The Lua script is the single implementation of the bucket on Redis, and both fakeredis and a real server
+    run it.
+  - Instances that share a Redis but disagree on the time will refill slightly differently. Clock skew between
+    gateway hosts is accepted at this scale and noted in the docs.
+  - Tests cannot rely on keys expiring. They assert the TTL that was set (`PTTL`) instead of waiting.
+  - CI gains one step that `check.py` does not run, so the "same steps as `check.py`" rule gains a single named
+    exception. The licence of the Redis server image was not checked; it is used only in CI and never shipped.
+  - `sortedcontainers` (a fakeredis dependency) has not been checked for a wheel yet. The task that adds
+    fakeredis proves the install.
+
+## ADR-0007
+
+**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Proposed · 2026-11-12
+
+- **Context:** The limit is in tokens per API key, but the true cost of a request is known only after the
+  provider answers. OpenAI says it counts the maximum of `max_tokens` and an estimate "based on the character
+  count" against its own limits (<https://developers.openai.com/api/docs/guides/rate-limits>, seen 2026-11-12).
+  `tiktoken` 0.14.0 is MIT and has cp313 wheels for Windows and Linux. But its first `get_encoding()` call
+  downloads the encoding file over HTTPS, it adds the `regex` and `requests` dependencies, and the licence of
+  the encoding files is unknown. Stripe's limiters use a token bucket on Redis (<https://stripe.com/blog/rate-limiters>,
+  2017-03-30). GCRA keeps less state but handles variable-cost refunds badly
+  (<https://brandur.org/rate-limiting>, 2015-09-18).
+- **Options:**
+  - Estimator: (a) a character heuristic, no dependency; (b) `tiktoken` with a vendored or pre-seeded encoding
+    file; (c) Hugging Face `tokenizers` (Apache-2.0), which also loads its files from the network.
+  - Algorithm: (d) token bucket; (e) GCRA; (f) sliding-window counter.
+- **Decision (proposed):** (a) and (d).
+  - **Estimate.** For each message, `ceil(characters / 4)` of its text content plus 3 tokens, plus 1 if it has a
+    `name`, plus 3 for the reply. This is the OpenAI cookbook's per-message overhead
+    (`How_to_count_tokens_with_tiktoken.ipynb`) applied to a character count instead of a tokenizer. It sits
+    behind a `TokenEstimator` protocol, so a real tokenizer can replace it through a later ADR.
+  - **Reservation.** The reserved amount is the input estimate plus `max_completion_tokens`, or `max_tokens`
+    if only that is given, or 0 if neither is.
+  - **Bucket.** Each API key has a bucket with `capacity_tokens` and `refill_tokens_per_second`, which is
+    derived from a configured `tokens_per_minute`. A reservation succeeds when the refilled balance is at least
+    the reserved amount, and it subtracts that amount. Otherwise it fails and reports how long until the balance
+    would cover it.
+  - **Settle.** After the provider answers, the difference between the provider's reported `total_tokens` and
+    the reservation is charged or refunded. A charge may take the balance below zero, and later requests wait
+    until it refills. If the provider fails, the whole reservation is refunded.
+  - **Oversized requests.** A reservation larger than `capacity_tokens` can never succeed. It is rejected at
+    once with 429, and the response carries no `Retry-After` (ADR-0008).
+- **Consequences:**
+  - No new dependency, and estimates are cheap. The heuristic is rough, mostly for English text, and settling
+    with the provider's usage corrects the error afterwards.
+  - A negative balance after settle can make the next request wait longer than its own size suggests. That is
+    intended: it charges for what was used.
+  - The provider's usage figures are trusted. The mock provider reports exact, deterministic usage.
+  - `tiktoken` is reconsidered in an ADR when the first real provider adapter arrives (Phase 2).
+
+## ADR-0008
+
+**HTTP contract for authentication, limit headers and errors** · Proposed · 2026-11-12
+
+- **Context:** ADR-0004 makes the API OpenAI-compatible, and the official OpenAI Python SDK is the reference
+  client. Checked on 2026-11-12:
+  - The OpenAI error body is `{"error": {"message", "type", "param", "code"}}`, all four required and `param`
+    and `code` nullable (openai-openapi `manual_spec`). The SDK reads that object and maps 401 to
+    `AuthenticationError` and 429 to `RateLimitError`. It retries 429 and honours `retry-after-ms` and
+    `retry-after` (openai-python `_base_client.py`, main branch).
+  - Observed but undocumented bodies: 401 has `type: "invalid_request_error"`, `code: "invalid_api_key"`
+    (openai-python issue 886). A token 429 has `type: "tokens"`, `code: "rate_limit_exceeded"` (OpenAI
+    community forum, 2024-04-15).
+  - OpenAI sends `x-ratelimit-limit-tokens`, `x-ratelimit-remaining-tokens` and `x-ratelimit-reset-tokens`,
+    with durations written like `6m0s`, but publishes no grammar for them.
+  - `Retry-After` is a non-negative integer of seconds or an HTTP date (RFC 9110, section 10.2.3).
+  - The IETF `RateLimit` header fields are still a draft (draft-ietf-httpapi-ratelimit-headers-11,
+    2026-05-23), and "tokens" is not one of its registered quota units.
+- **Options:** (a) OpenAI's error body and `x-ratelimit-*-tokens` headers; (b) the IETF draft fields; (c) both.
+- **Decision (proposed):** (a).
+  - **Authentication.** `Authorization: Bearer <key>`. Keys come from configuration, never from code. A
+    missing or unknown key gets 401 with `type: "invalid_request_error"` and `code: "invalid_api_key"`, and the
+    message never echoes the key.
+  - **Limit headers.** Every response to an authenticated `/v1/chat/completions` request carries the three
+    headers, on 200 and on 429:
+    - `x-ratelimit-limit-tokens` is `capacity_tokens`.
+    - `x-ratelimit-remaining-tokens` is the balance after the decision, rounded down and never below 0.
+    - `x-ratelimit-reset-tokens` is the time until the bucket is full again, rounded up to whole seconds and
+      written as `<s>s` below a minute or `<m>m<s>s` otherwise (`0s`, `45s`, `6m0s`). This project defines that
+      grammar, since OpenAI does not publish one.
+  - **429.** The body has `type: "tokens"`, `code: "rate_limit_exceeded"` and `param: null`, and a message that
+    gives the limit, the requested amount and the wait. A request that can succeed later also gets
+    `Retry-After` as whole seconds, rounded up. An oversized request (ADR-0007) gets no `Retry-After`, and its
+    message says the request is larger than the limit.
+  - **400.** Invalid requests get `type: "invalid_request_error"`, with `param` naming the field when known.
+    `stream: true` is rejected with `code: "unsupported_parameter"` and `param: "stream"`, because streaming is
+    out of scope (ADR-0004). FastAPI's default 422 validation response is replaced by this 400 shape.
+  - The error shapes and headers appear in the OpenAPI document, so the snapshot (ADR-0005) records them.
+- **Consequences:**
+  - The official SDK raises its usual typed errors and retries 429 by itself.
+  - The `x-ratelimit-*` headers are a vendor convention, not a standard. Adopting the IETF fields is a backlog
+    item for when the draft becomes an RFC.
+  - The 429 and 401 `type` and `code` values copy observed OpenAI behaviour that OpenAI does not document.
+    They may need to change if OpenAI changes.
 
 ---
 
