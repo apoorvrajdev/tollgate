@@ -44,6 +44,12 @@ def test_is_canonical_accepts_canonical_text() -> None:
     assert is_canonical('{\n  "a": 1,\n  "b": 2\n}\n')
 
 
+def test_is_canonical_keeps_non_ascii_characters_raw() -> None:
+    # The regenerate script writes ensure_ascii=False: raw UTF-8 is canonical, \u escapes are not.
+    assert is_canonical('{\n  "title": "café"\n}\n')
+    assert not is_canonical('{\n  "title": "caf\\u00e9"\n}\n')
+
+
 def test_is_canonical_rejects_wrong_indent() -> None:
     assert not is_canonical('{\n    "a": 1\n}\n')
 
