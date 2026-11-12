@@ -2,4 +2,6 @@
 # Hook scripts must keep LF endings so Git's sh can run them on Windows
 .githooks/* text eol=lf
 *.sh text eol=lf
+# The OpenAPI snapshot is compared as text and must keep LF endings on every platform
+tests/contract/*.json text eol=lf
 *.png binary
