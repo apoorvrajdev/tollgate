@@ -12,11 +12,9 @@ Accepted decisions change only through a new ADR.
 | [0003](#adr-0003) | Python toolchain, one check command, plain pip | Accepted | 2026-11-09 |
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
-| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Proposed | 2026-11-12 |
-| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Proposed | 2026-11-12 |
-| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Proposed | 2026-11-12 |
-
-ADR-0006 must be accepted before any Redis package is added or any limiter code that uses Redis is written.
+| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
+| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted | 2026-11-12 |
+| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted | 2026-11-12 |
 
 ---
 
@@ -107,7 +105,7 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
 
 ## ADR-0006
 
-**Redis client, Lua token bucket and how it is tested** · Proposed · 2026-11-12
+**Redis client, Lua token bucket and how it is tested** · Accepted · 2026-11-12
 
 - **Context:** The rate limiter keeps one bucket per API key, shared by every gateway instance, and each
   reservation must read, refill and update the bucket in one atomic step. ADR-0003 allows only packages with
@@ -135,7 +133,7 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
     test a Python copy of the script, not the script.
   - (d) `coredis` (MIT, fully typed). Its compiled parts have no `win_amd64` wheel; the pure-Python fallback
     is unverified here.
-- **Decision (proposed):** (a).
+- **Decision:** (a).
   - Runtime dependency: `redis==8.1.0`, without the optional `hiredis` extra. Dev dependencies:
     `fakeredis[lua]==2.40.0`, which brings `lupa==2.8`. Each is pinned exactly when the task that needs it adds
     it, and the install must pass with `--only-binary=:all:` on Windows and in CI.
@@ -167,7 +165,7 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
 
 ## ADR-0007
 
-**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Proposed · 2026-11-12
+**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted · 2026-11-12
 
 - **Context:** The limit is in tokens per API key, but the true cost of a request is known only after the
   provider answers. OpenAI says it counts the maximum of `max_tokens` and an estimate "based on the character
@@ -181,7 +179,7 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
   - Estimator: (a) a character heuristic, no dependency; (b) `tiktoken` with a vendored or pre-seeded encoding
     file; (c) Hugging Face `tokenizers` (Apache-2.0), which also loads its files from the network.
   - Algorithm: (d) token bucket; (e) GCRA; (f) sliding-window counter.
-- **Decision (proposed):** (a) and (d).
+- **Decision:** (a) and (d).
   - **Estimate.** For each message, `ceil(characters / 4)` of its text content plus 3 tokens, plus 1 if it has a
     `name`, plus 3 for the reply. This is the OpenAI cookbook's per-message overhead
     (`How_to_count_tokens_with_tiktoken.ipynb`) applied to a character count instead of a tokenizer. It sits
@@ -207,7 +205,7 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
 
 ## ADR-0008
 
-**HTTP contract for authentication, limit headers and errors** · Proposed · 2026-11-12
+**HTTP contract for authentication, limit headers and errors** · Accepted · 2026-11-12
 
 - **Context:** ADR-0004 makes the API OpenAI-compatible, and the official OpenAI Python SDK is the reference
   client. Checked on 2026-11-12:
@@ -224,7 +222,7 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
   - The IETF `RateLimit` header fields are still a draft (draft-ietf-httpapi-ratelimit-headers-11,
     2026-05-23), and "tokens" is not one of its registered quota units.
 - **Options:** (a) OpenAI's error body and `x-ratelimit-*-tokens` headers; (b) the IETF draft fields; (c) both.
-- **Decision (proposed):** (a).
+- **Decision:** (a).
   - **Authentication.** `Authorization: Bearer <key>`. Keys come from configuration, never from code. A
     missing or unknown key gets 401 with `type: "invalid_request_error"` and `code: "invalid_api_key"`, and the
     message never echoes the key.
