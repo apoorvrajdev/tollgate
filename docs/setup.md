@@ -42,14 +42,15 @@ uvicorn app.main:app --reload
 curl localhost:8000/health   # {"status":"ok"}
 ```
 
-`scripts/check.py` runs four steps in order and stops at the first failure, naming it:
+`scripts/check.py` runs five steps in order and stops at the first failure, naming it:
 
 | Step | Command it runs |
 | --- | --- |
 | 1 | `ruff check .` |
 | 2 | `ruff format --check .` |
 | 3 | `mypy` (strict; paths come from `pyproject.toml`) |
-| 4 | `pytest` |
+| 4 | `contract`: `pytest tests/test_openapi_snapshot.py` (live OpenAPI equals the snapshot) |
+| 5 | `pytest --ignore=tests/test_openapi_snapshot.py` (every other test) |
 
 Run it before every commit. To fix formatting, run `python -m ruff format .`.
 

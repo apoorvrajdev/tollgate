@@ -17,7 +17,10 @@ STEPS: list[tuple[str, list[str]]] = [
     ("ruff check", [sys.executable, "-m", "ruff", "check", "."]),
     ("ruff format --check", [sys.executable, "-m", "ruff", "format", "--check", "."]),
     ("mypy", [sys.executable, "-m", "mypy"]),
-    ("pytest", [sys.executable, "-m", "pytest"]),
+    # The contract test is its own step so a snapshot failure names itself. The pytest step
+    # skips that file so no test runs twice; keep the two entries and ci.yml in step.
+    ("contract", [sys.executable, "-m", "pytest", "tests/test_openapi_snapshot.py"]),
+    ("pytest", [sys.executable, "-m", "pytest", "--ignore=tests/test_openapi_snapshot.py"]),
 ]
 
 
