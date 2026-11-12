@@ -9,7 +9,7 @@ single check command (ADR-0003).
 | --- | --- | --- |
 | Python | standard Windows build of 3.13 from python.org (not the MSYS2/MinGW one) | 3.13.2 via `py -3.13` |
 | Git | any recent version | 2.52.0 (Windows) |
-| Node.js | 20 or newer, only for the commit hooks | 24.12.0 |
+| Node.js | 20 or newer, for the commit hooks and their tests | 24.12.0 locally; 26 in CI (`actions/setup-node`, `node-version: "26"`) |
 | GitHub CLI | only for opening pull requests | 2.92.0 |
 
 Why not the MSYS2 Python: `python -c "import sysconfig; print(sysconfig.get_platform())"` prints
