@@ -38,7 +38,7 @@ The project is run from the repository root and is not installed as a package (t
 
 ```bash
 python scripts/check.py
-uvicorn app.main:app --reload
+uvicorn --factory app.main:create_app --reload
 curl localhost:8000/health   # {"status":"ok"}
 ```
 
@@ -70,7 +70,7 @@ Review the resulting diff before committing it.
 
 Pins are exact and updated by hand, one task at a time. Use throwaway venvs, not the project one:
 
-1. In a new venv, install the runtime packages (`fastapi`, `uvicorn`) with `--only-binary=:all:`, run
+1. In a new venv, install the runtime packages (`fastapi`, `pydantic`, `uvicorn`) with `--only-binary=:all:`, run
    `pip freeze`, and write the result to `requirements.txt` under its two comment lines.
 2. In a second new venv, install the new `requirements.txt`, then `httpx`, `pytest`, `ruff` and `mypy`, run
    `pip freeze`, and put every line that is not in the runtime freeze into `requirements-dev.txt`, after

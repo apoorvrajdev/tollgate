@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.main import create_app
+from tests.fakes import FakeClock, make_settings
 
 SNAPSHOT_PATH = Path(__file__).parent / "contract" / "openapi.json"
 REGENERATE_HINT = (
@@ -27,7 +28,9 @@ def differs(snapshot: dict[str, Any], live: dict[str, Any]) -> bool:
 
 
 def test_live_openapi_matches_snapshot() -> None:
-    assert not differs(load_snapshot(), create_app().openapi()), REGENERATE_HINT
+    assert not differs(load_snapshot(), create_app(make_settings(), FakeClock()).openapi()), (
+        REGENERATE_HINT
+    )
 
 
 def is_canonical(text: str) -> bool:
@@ -67,27 +70,27 @@ def test_is_canonical_rejects_missing_trailing_newline() -> None:
 
 
 def test_comparison_detects_removed_route() -> None:
-    live = copy.deepcopy(create_app().openapi())
+    live = copy.deepcopy(create_app(make_settings(), FakeClock()).openapi())
     del live["paths"]["/health"]
     assert differs(load_snapshot(), live)
 
 
 def test_comparison_detects_renamed_field() -> None:
-    live = copy.deepcopy(create_app().openapi())
+    live = copy.deepcopy(create_app(make_settings(), FakeClock()).openapi())
     properties = live["components"]["schemas"]["HealthResponse"]["properties"]
     properties["state"] = properties.pop("status")
     assert differs(load_snapshot(), live)
 
 
 def test_comparison_detects_changed_status_code() -> None:
-    live = copy.deepcopy(create_app().openapi())
+    live = copy.deepcopy(create_app(make_settings(), FakeClock()).openapi())
     responses = live["paths"]["/health"]["get"]["responses"]
     responses["201"] = responses.pop("200")
     assert differs(load_snapshot(), live)
 
 
 def test_comparison_detects_added_route() -> None:
-    live = copy.deepcopy(create_app().openapi())
+    live = copy.deepcopy(create_app(make_settings(), FakeClock()).openapi())
     live["paths"]["/extra"] = {"get": {"responses": {"200": {"description": "ok"}}}}
     assert differs(load_snapshot(), live)
 
@@ -98,5 +101,5 @@ def test_comparison_accepts_identical_documents() -> None:
 
 def test_comparing_does_not_modify_snapshot_file() -> None:
     before = SNAPSHOT_PATH.read_bytes()
-    differs(load_snapshot(), create_app().openapi())
+    differs(load_snapshot(), create_app(make_settings(), FakeClock()).openapi())
     assert SNAPSHOT_PATH.read_bytes() == before

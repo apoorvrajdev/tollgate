@@ -148,7 +148,7 @@ py -3.13 -m venv .venv
 source .venv/Scripts/activate
 python -m pip install --only-binary=:all: -r requirements-dev.txt
 python scripts/check.py
-uvicorn app.main:app --reload
+uvicorn --factory app.main:create_app --reload
 curl localhost:8000/health   # {"status":"ok"}
 ```
 
