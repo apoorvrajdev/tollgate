@@ -9,21 +9,23 @@ A task becomes `done` in the pull request that delivers it (the status is set in
 takes effect when the pull request merges). `in-progress` and `review` exist only on the task branch; `main`
 shows `todo`, `blocked` or `done`.
 
-## Current phase: 0 - Foundation
+## Current phase: 0 - Foundation (complete)
 
 A reproducible Python toolchain, one check command, commit guards under test, CI, and a frozen API contract.
-No gateway features yet.
+No gateway features yet. The owner signed off the gate on 2026-11-12; Phase 1 has no task cards yet and is planned
+at its own gate.
 
-**Gate (owner signs off):**
+**Gate (signed off by the owner, 2026-11-12):**
 
-- [ ] `python scripts/check.py` is green locally and in CI (lint, format, mypy strict, tests)
-- [ ] CI runs on Python 3.13 for every pull request and push to `main`, in a job named exactly `lint and test`
-- [ ] `lint and test` is a required status check in the `protect-main` ruleset, which keeps no bypass actors
-- [ ] The commit guards are covered by tests, and those tests passed a mutation check
-- [ ] The OpenAPI snapshot test is in place and runs as part of `scripts/check.py`
-- [ ] ADR-0004 and ADR-0005 accepted or revised (ADR-0003 accepted 2026-11-09)
-- [ ] Every commit is authored by the owner, with no co-author trailers; merge commits created by GitHub may
-      show GitHub as committer
+- [x] `python scripts/check.py` is green locally and in CI (lint, format, mypy strict, tests)
+- [x] CI runs on Python 3.13 for every pull request and push to `main`, in a job named exactly `lint and test`
+- [x] `lint and test` is a required status check in the `protect-main` ruleset, which keeps no bypass actors
+- [x] The commit guards are covered by tests, and those tests passed a mutation check
+- [x] The OpenAPI snapshot test is in place and runs as part of `scripts/check.py`
+- [x] ADR-0004 and ADR-0005 accepted or revised (ADR-0003 accepted 2026-11-09)
+- [x] Every commit is authored by the owner, with no co-author trailers; merge commits created by GitHub may
+      show GitHub as committer (the bootstrap commit `7370304` has the committer name `apoorvrajdev`,
+      with the same email)
 
 ## Board
 
@@ -253,3 +255,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-10 | T-002 | Guard tests added; `scripts/check.py` passed 10 runs in a row (50 tests). Mutation check: 30 mutations of scratch copies of the hooks (each pattern or rule removed, `/i` dropped, anchors loosened or removed, comment skip removed, exit codes inverted, backslash normalisation removed); the first round left 10 survivors (comment skip, five loosened anchors, four dropped `/i` on path rules), closed by samples in a second round, after which all 30 were caught. Run with `node` off PATH, 39 tests error with the Node.js message and none skip. Reviewer APPROVE with three Minor findings | Verifier tables, two rounds; the pull request's `lint and test` run (criterion 6) is recorded in the pull request |
 | 2026-11-12 | T-004 | `create_app()` and a typed `/health` response added; the OpenAPI snapshot `tests/contract/openapi.json` is committed and compared by `tests/test_openapi_snapshot.py`; only `scripts/regenerate_openapi.py` writes it. `scripts/check.py` and the `lint and test` job each run a named `contract` step, and the main pytest step ignores that file so no test runs twice. `.gitattributes` gained `tests/contract/*.json text eol=lf` at the owner's request. `scripts/check.py` passed (5 steps, 63 tests). Mutation check on scratch copies: renamed field, removed route, status code 201, `Literal` value changed and title changed were all caught; one survivor, removing `response_model` while keeping the return annotation, is an equivalent mutant (the generated document is byte-identical). A first round left two test-quality survivors (the canonical-format check could be made vacuous, and CRLF was normalised away); both are now caught. Criterion 5 was shown locally: a planted snapshot difference in a scratch copy fails `check.py` at `contract`. The CI red run was waived by the owner, so the first CI run on the pull request is the proof that the step is green | Verifier tables; `check.py` output |
 | 2026-11-12 | T-004 | Correction to the row above: the final count is 65 tests (14 in the `contract` step, 51 in the `pytest` step), and the mutation check ran in three rounds. Round one left two test-quality survivors (the canonical-format check could be made vacuous, and CRLF was normalised away). Round two, on the CRLF fix, left one more: `ensure_ascii=True` made no test fail because no input was non-ASCII. It is now caught by `test_is_canonical_keeps_non_ascii_characters_raw`. After the last round, six mutations of the canonical-format check (always true, `sort_keys` dropped, indent 4, no trailing newline, CRLF normalisation restored, `ensure_ascii=True`) are all caught, and so is a CRLF copy of the snapshot. The only survivor is the equivalent `response_model` mutant. `scripts/check.py` passed (5 steps) and the `lint and test` job was green on the last push | Verifier tables; `check.py` output; PR #9 checks |
+| 2026-11-12 | - | Phase 0 gate signed off by the owner: all seven gate items met. ADR-0004 and ADR-0005 accepted as written, no revisions. Gate check read back the same day: `protect-main` active with required check `lint and test` and no bypass actors; `ci` green on `main` at `f5c34f4`; 54 commits, all with the owner's author email, none with a trailer or attribution line | `gh api repos/apoorvrajdev/tollgate/rulesets/26862192`, `gh run list --branch main`, `git log` (read-only) |
