@@ -13,13 +13,12 @@ shows `todo`, `blocked` or `done`.
 
 `POST /v1/chat/completions` (non-streaming) in front of a mock provider, with API-key authentication and a
 per-key token bucket that reserves estimated tokens before the call and settles with actual usage after. State
-lives in memory or in Redis. Planned 2026-11-12; ADR-0006 to ADR-0008 are Proposed and must be accepted before
-the tasks that depend on them start.
+lives in memory or in Redis. Planned 2026-11-12; ADR-0006 to ADR-0008 were accepted by the owner the same day.
 
 **Gate (owner signs off):**
 
 - [ ] Every Phase 1 task is `done`, and `python scripts/check.py` is green locally and in CI
-- [ ] ADR-0006, ADR-0007 and ADR-0008 accepted or revised
+- [x] ADR-0006, ADR-0007 and ADR-0008 accepted or revised (accepted as written, 2026-11-12)
 - [ ] `/v1/chat/completions` works with the mock provider, and the OpenAPI snapshot records its 200, 400, 401,
       429 and 502 responses and the limit headers
 - [ ] The shared limiter behaviour suite passes on the in-memory limiter, on fakeredis and on a real Redis
@@ -60,11 +59,11 @@ cards further down are listed by ID.
 | T-002 | Tests for the commit guards | 0 | done | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
 | T-004 | Typed app skeleton and OpenAPI snapshot | 0 | done | T-001, T-003 |
 | T-101 | Injected clock and validated settings | 1 | todo | Phase 0 gate |
-| T-102 | Chat completions endpoint with a mock provider | 1 | todo | T-101; ADR-0008 accepted |
-| T-103 | API key authentication | 1 | todo | T-101, T-102; ADR-0008 accepted |
-| T-104 | Token estimator | 1 | todo | T-102; ADR-0007 accepted |
-| T-105 | In-memory token bucket and the shared behaviour suite | 1 | todo | T-101; ADR-0007 accepted |
-| T-106 | Redis token bucket, unit-tested against fakeredis | 1 | todo | T-105; ADR-0006 accepted |
+| T-102 | Chat completions endpoint with a mock provider | 1 | todo | T-101; ADR-0008 accepted 2026-11-12 |
+| T-103 | API key authentication | 1 | todo | T-101, T-102; ADR-0008 accepted 2026-11-12 |
+| T-104 | Token estimator | 1 | todo | T-102; ADR-0007 accepted 2026-11-12 |
+| T-105 | In-memory token bucket and the shared behaviour suite | 1 | todo | T-101; ADR-0007 accepted 2026-11-12 |
+| T-106 | Redis token bucket, unit-tested against fakeredis | 1 | todo | T-105; ADR-0006 accepted 2026-11-12 |
 | T-107 | Real Redis in CI | 1 | todo | T-106 |
 | T-108 | Rate limiting on chat completions | 1 | todo | T-103, T-104, T-105, T-106 |
 
