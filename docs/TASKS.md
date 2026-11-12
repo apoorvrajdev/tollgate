@@ -9,11 +9,30 @@ A task becomes `done` in the pull request that delivers it (the status is set in
 takes effect when the pull request merges). `in-progress` and `review` exist only on the task branch; `main`
 shows `todo`, `blocked` or `done`.
 
-## Current phase: 0 - Foundation (complete)
+## Current phase: 1 - Token-aware rate limiting
+
+`POST /v1/chat/completions` (non-streaming) in front of a mock provider, with API-key authentication and a
+per-key token bucket that reserves estimated tokens before the call and settles with actual usage after. State
+lives in memory or in Redis. Planned 2026-11-12; ADR-0006 to ADR-0008 are Proposed and must be accepted before
+the tasks that depend on them start.
+
+**Gate (owner signs off):**
+
+- [ ] Every Phase 1 task is `done`, and `python scripts/check.py` is green locally and in CI
+- [ ] ADR-0006, ADR-0007 and ADR-0008 accepted or revised
+- [ ] `/v1/chat/completions` works with the mock provider, and the OpenAPI snapshot records its 200, 400, 401,
+      429 and 502 responses and the limit headers
+- [ ] The shared limiter behaviour suite passes on the in-memory limiter, on fakeredis and on a real Redis
+      server, the last in the CI step `redis integration`, green on `main`
+- [ ] Every Phase 1 task that adds tests has a mutation table with no unexplained survivor
+- [ ] Tests use no network and no paid API, except the CI-only Redis service container on localhost (ADR-0006)
+- [ ] README and ARCHITECTURE describe what is built, and every claim comes from a recorded run
+- [ ] Every commit is authored by the owner, with no co-author trailers
+
+## Phase 0 - Foundation (complete)
 
 A reproducible Python toolchain, one check command, commit guards under test, CI, and a frozen API contract.
-No gateway features yet. The owner signed off the gate on 2026-11-12; Phase 1 has no task cards yet and is planned
-at its own gate.
+No gateway features yet. The owner signed off the gate on 2026-11-12, and Phase 1 was planned the same day.
 
 **Gate (signed off by the owner, 2026-11-12):**
 
@@ -30,7 +49,8 @@ at its own gate.
 ## Board
 
 Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
-T-004. The rows below are in that order; the cards further down are listed by ID.
+T-004. Delivery order in Phase 1: T-101 to T-108 in number order. The rows below are in delivery order; the
+cards further down are listed by ID.
 
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -39,6 +59,14 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | T-003 | Continuous integration | 0 | done | T-001 |
 | T-002 | Tests for the commit guards | 0 | done | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
 | T-004 | Typed app skeleton and OpenAPI snapshot | 0 | done | T-001, T-003 |
+| T-101 | Injected clock and validated settings | 1 | todo | Phase 0 gate |
+| T-102 | Chat completions endpoint with a mock provider | 1 | todo | T-101; ADR-0008 accepted |
+| T-103 | API key authentication | 1 | todo | T-101, T-102; ADR-0008 accepted |
+| T-104 | Token estimator | 1 | todo | T-102; ADR-0007 accepted |
+| T-105 | In-memory token bucket and the shared behaviour suite | 1 | todo | T-101; ADR-0007 accepted |
+| T-106 | Redis token bucket, unit-tested against fakeredis | 1 | todo | T-105; ADR-0006 accepted |
+| T-107 | Real Redis in CI | 1 | todo | T-106 |
+| T-108 | Rate limiting on chat completions | 1 | todo | T-103, T-104, T-105, T-106 |
 
 ---
 
@@ -195,11 +223,262 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 
 ---
 
+### T-101 - Injected clock and validated settings
+
+- **Status:** todo
+- **Goal:** time and configuration reach the app through `create_app()`, so later tasks can use a fake clock
+  and per-test settings instead of globals.
+- **Context:** `app/main.py`, `tests/test_health.py`, ARCHITECTURE §3 and §6, CLAUDE.md §8.
+- **Depends on:** the Phase 0 gate (signed off). No ADR.
+- **Deliverables:**
+  - `app/clock.py`: a `Clock` protocol with `now_seconds() -> float` and `SystemClock` (wall-clock time, since
+    several instances share one Redis). `tests/fakes.py`: `FakeClock` that moves only when `advance(seconds)`
+    is called.
+  - `app/settings.py`: a frozen `Settings` model built by `Settings.from_env(environ)`, from
+    `TOLLGATE_API_KEYS` (comma-separated, at least one non-empty key), `TOLLGATE_TOKENS_PER_MINUTE`
+    (integer > 0), `TOLLGATE_CAPACITY_TOKENS` (integer > 0, defaults to the per-minute value),
+    `TOLLGATE_LIMITER_BACKEND` (`memory` by default, or `redis`) and `TOLLGATE_REDIS_URL` (required when the
+    backend is `redis`). API keys are held so that `repr()` and validation errors never show them.
+  - `create_app(settings: Settings | None = None, clock: Clock | None = None)`; with no arguments it reads
+    `os.environ`. The module-level `app` object is removed, because it would read the environment on import.
+    The server starts with `uvicorn --factory app.main:create_app`; `docs/setup.md` and README change to match.
+  - `docs/setup.md`: a table of the variables, their meaning and their defaults, without values for keys.
+- **Contract:** unchanged. The snapshot test must pass without regeneration.
+- **Acceptance criteria:**
+  1. Each invalid configuration fails at startup with a message that names the variable: no keys, an empty
+     key, a non-integer or non-positive number, an unknown backend, and `redis` without a URL.
+  2. No configured API key appears in `repr(settings)` or in any validation error message (tested with a
+     sentinel key).
+  3. `/health` still returns 200 `{"status": "ok"}`, and the OpenAPI snapshot is unchanged.
+  4. `FakeClock` changes only through `advance`; no test calls `time.sleep` or `asyncio.sleep` (grep).
+  5. `uvicorn --factory app.main:create_app` serves `/health` when the variables are set (OWNER-CHECK: run by
+     hand, since tests do not start a server).
+- **Verification:** `python scripts/check.py` green; mutation table (defaults swapped, a validation rule
+  removed, key masking removed, clock advance ignored); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-101-clock-settings`; `feat(app): add an injected clock`, `feat(app): read
+  settings from the environment at startup`, `docs(setup): document the configuration variables`,
+  `docs(tasks): complete T-101`.
+- **Size:** about 200 lines.
+
+### T-102 - Chat completions endpoint with a mock provider
+
+- **Status:** todo
+- **Goal:** `POST /v1/chat/completions` accepts an OpenAI-style request and returns an OpenAI-style response
+  from a deterministic mock provider. Authentication (T-103) and limits (T-108) come later.
+- **Context:** ADR-0004, ADR-0008, ARCHITECTURE §2 to §4, `app/main.py`, `tests/test_openapi_snapshot.py`.
+- **Depends on:** T-101; ADR-0008 accepted.
+- **Deliverables:**
+  - `app/api/models.py`: request model with `model`, `messages` (at least one; `role` is `system`, `user` or
+    `assistant`; `content` is a string; optional `name`), `max_completion_tokens`, `max_tokens`,
+    `temperature` (0 to 2), `n` (only 1), `stream` and `user`; response model with `id`, `object`
+    (`"chat.completion"`), `created`, `model`, `choices` (`index`, `message`, `finish_reason`) and `usage`
+    (`prompt_tokens`, `completion_tokens`, `total_tokens`). Array content, `n` above 1 and `stream: true` are
+    rejected with 400 (ADR-0008).
+  - `app/api/errors.py`: the OpenAI error body and exception handlers. FastAPI's 422 is replaced by 400, both
+    at runtime and in the OpenAPI document.
+  - `app/providers/base.py`: the `Provider` protocol. `app/providers/mock.py`: `MockProvider`, whose reply and
+    usage depend only on the request (for example, usage counts whitespace-separated words), with `created`
+    from the `Clock` and `id` from an injected id source.
+  - `app/api/chat.py`: the router, registered in `create_app()`.
+- **Contract:** changes. The snapshot is regenerated with `scripts/regenerate_openapi.py` in its own commit,
+  and the diff is reviewed in the PR.
+- **Acceptance criteria:**
+  1. A valid request returns 200 with every field the OpenAI SDK's `ChatCompletion` type requires, and the
+     same body every time under a fixed clock and id source.
+  2. A missing `model`, empty `messages`, an unknown role, `temperature` 3, `n` 2, array content and
+     `stream: true` each return 400 with the ADR-0008 body and the right `param`; no response is ever 422.
+  3. The OpenAPI document lists the route with its 200 and 400 responses, and the snapshot diff contains only
+     the new route, its models and the error model.
+  4. No test uses the network; only `MockProvider` is used.
+- **Verification:** `python scripts/check.py` green; mutation table (a response field renamed,
+  `finish_reason` changed, the `stream` check removed, the 400 handler removed, the `n` check removed,
+  usage arithmetic changed); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-102-chat-completions`; `feat(api): add chat completion models and the
+  error body`, `feat(providers): add the provider interface and a mock provider`, `feat(api): add the chat
+  completions endpoint`, `test(contract): update the OpenAPI snapshot for chat completions`,
+  `docs(tasks): complete T-102`.
+- **Size:** about 350 lines plus the snapshot diff.
+
+### T-103 - API key authentication
+
+- **Status:** todo
+- **Goal:** only configured API keys can call `/v1/chat/completions`; `/health` stays open.
+- **Context:** ADR-0008, `app/settings.py`, `app/api/chat.py`, `app/api/errors.py`.
+- **Depends on:** T-101, T-102; ADR-0008 accepted.
+- **Deliverables:** `app/api/auth.py`: a FastAPI dependency that reads `Authorization: Bearer <key>`, compares
+  it with every configured key using `hmac.compare_digest`, and returns a caller identity whose id is a
+  SHA-256 digest of the key (used later for bucket keys). The OpenAPI document gets a bearer security scheme on
+  the route and its 401 response.
+- **Contract:** changes (security scheme and 401 response); regenerated snapshot in its own commit.
+- **Acceptance criteria:**
+  1. A missing header, a scheme other than `Bearer`, an empty key and an unknown key each return 401 with
+     `type: "invalid_request_error"`, `code: "invalid_api_key"`, `param: null`.
+  2. A configured key gets 200. `/health` needs no key.
+  3. No response body or log record contains the submitted key (tested with a sentinel key and `caplog`).
+  4. The caller identity contains no key text, only the digest.
+- **Verification:** `python scripts/check.py` green; mutation table (comparison inverted, scheme check
+  removed, `/health` protected, digest replaced by the raw key, key echoed in the message);
+  `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-103-api-keys`; `feat(api): require an API key for chat completions`,
+  `test(contract): update the OpenAPI snapshot for authentication`, `docs(tasks): complete T-103`.
+- **Size:** about 150 lines.
+
+### T-104 - Token estimator
+
+- **Status:** todo
+- **Goal:** the number of tokens to reserve for a request is computed by the rule in ADR-0007.
+- **Context:** ADR-0007, `app/api/models.py`.
+- **Depends on:** T-102; ADR-0007 accepted.
+- **Deliverables:** `app/limits/estimate.py`: a `TokenEstimator` protocol, `HeuristicEstimator` (per message
+  `ceil(characters / 4) + 3`, plus 1 with a `name`, plus 3 for the reply; characters are Python string length),
+  and `reserved_tokens(request, estimator)` (estimate plus `max_completion_tokens`, else `max_tokens`, else 0).
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Boundary table: one message with empty content gives 6; 1 to 4 characters give 7; 5 characters give 8;
+     a `name` adds exactly 1; each extra message adds its own share plus 3.
+  2. The estimate never decreases when content grows by one character (checked over lengths 0 to 200).
+  3. `max_completion_tokens` wins over `max_tokens` when both are given; neither gives the estimate alone.
+  4. No dependency is added.
+- **Verification:** `python scripts/check.py` green; mutation table (`ceil` to `floor`, divisor changed, reply
+  overhead removed, `name` overhead removed, precedence of the two max fields swapped);
+  `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-104-token-estimator`; `feat(limits): add the token estimator`,
+  `docs(tasks): complete T-104`.
+- **Size:** about 120 lines.
+
+### T-105 - In-memory token bucket and the shared behaviour suite
+
+- **Status:** todo
+- **Goal:** a correct reference limiter, and one behaviour suite that every later limiter must also pass.
+- **Context:** ADR-0007, ARCHITECTURE §3 (`RateLimiter`), `app/clock.py`, `tests/fakes.py`.
+- **Depends on:** T-101; ADR-0007 accepted.
+- **Deliverables:**
+  - `app/limits/limiter.py`: the `RateLimiter` protocol (`reserve(key, estimated_tokens) -> Decision`,
+    `settle(key, reserved_tokens, actual_tokens)`) and `Decision` (`allowed`, `limit_tokens`,
+    `remaining_tokens`, `retry_after_seconds` or `None`, `reset_seconds`).
+  - `app/limits/memory.py`: `InMemoryRateLimiter`, driven by the injected `Clock`, with one `asyncio.Lock` so
+    concurrent calls cannot overspend.
+  - `tests/limits/behaviour.py`: the shared suite, parametrised by a limiter factory and a `FakeClock`, so
+    T-106 and T-107 run the same cases. ARCHITECTURE §3 is updated with the final names.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. A reservation equal to the balance is allowed; one token more is refused with the exact wait, rounded up.
+  2. The balance refills at `tokens_per_minute / 60` per second and never exceeds `capacity_tokens`.
+  3. A reservation larger than `capacity_tokens` is refused with `retry_after_seconds` `None`.
+  4. Settle charges or refunds the difference; a charge can make the balance negative, and a refund never
+     lifts it above capacity.
+  5. Keys are independent; 50 concurrent reservations (`asyncio.gather`) never spend more than the balance.
+  6. Every case uses `FakeClock`; nothing sleeps.
+- **Verification:** `python scripts/check.py` green; mutation table with at least eight mutations (`>=` to
+  `>`, capacity cap removed, refill rate doubled, settle sign flipped, oversized check removed, wait rounded
+  down, lock removed, key ignored); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-105-memory-limiter`; `feat(limits): add the rate limiter interface and the
+  in-memory token bucket`, `test(limits): add the shared limiter behaviour suite`, `docs(architecture): fix
+  the rate limiter interface`, `docs(tasks): complete T-105`.
+- **Size:** about 300 lines.
+
+### T-106 - Redis token bucket, unit-tested against fakeredis
+
+- **Status:** todo
+- **Goal:** the token bucket runs as one Lua script on Redis and passes the shared suite on fakeredis.
+- **Context:** ADR-0006, ADR-0007, `app/limits/limiter.py`, `tests/limits/behaviour.py`, ADR-0003,
+  `docs/setup.md` ("Updating pins").
+- **Depends on:** T-105; ADR-0006 accepted (it lists the dependencies this task adds).
+- **Deliverables:**
+  - Pins: `redis==8.1.0` in `requirements.txt` and `pyproject.toml`; `fakeredis[lua]==2.40.0` with `lupa`
+    and every other new transitive pin in `requirements-dev.txt`, regenerated per `docs/setup.md`.
+  - `app/limits/token_bucket.lua`: reads and refills the bucket, decides, writes, sets `PEXPIRE`, and returns
+    the balance as a string. The current time arrives as an argument in milliseconds; the script never calls
+    `TIME`.
+  - `app/limits/redis_limiter.py`: `RedisRateLimiter` on `redis.asyncio`, using `register_script`; bucket keys
+    are a prefix plus the SHA-256 digest of the API key; one adapter function turns script results into typed
+    values.
+  - `tests/limits/test_redis_limiter.py`: the shared suite on `fakeredis.FakeAsyncRedis`, plus checks of the
+    key names and the TTL (`PTTL`).
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Both requirements files install with `--only-binary=:all:` on Windows and in CI.
+  2. The shared suite passes on fakeredis with the real Lua script.
+  3. No key written to Redis contains the API key; the bucket key has a TTL.
+  4. The script contains no `TIME` call (grep), and mypy strict passes with no `type: ignore` outside the
+     adapter.
+  5. Docs and the PR say "unit-tested against fakeredis" and make no claim about real Redis (ADR-0006).
+- **Verification:** `python scripts/check.py` green; mutation table on the Lua script and the adapter
+  (comparison loosened, capacity cap removed, refill computed from the wrong timestamp, `PEXPIRE` removed,
+  balance returned as a number, settle sign flipped); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-106-redis-limiter`; `build(deps): add redis and fakeredis`,
+  `feat(limits): add the Redis token bucket`, `test(limits): run the shared suite on fakeredis`,
+  `docs(tasks): complete T-106`.
+- **Size:** about 250 lines plus the pin updates.
+
+### T-107 - Real Redis in CI
+
+- **Status:** todo
+- **Goal:** the Redis limiter is proven against a real Redis server, in CI only, without adding network use to
+  local runs.
+- **Context:** ADR-0006, `.github/workflows/ci.yml`, `pyproject.toml`, `scripts/check.py`,
+  `tests/limits/behaviour.py`.
+- **Depends on:** T-106.
+- **Deliverables:**
+  - `pyproject.toml`: the `redis_server` marker registered, and `-m "not redis_server"` in the default pytest
+    options, so the tests are deselected (not skipped) in `check.py` and local runs.
+  - `tests/limits/test_redis_server.py`: the shared suite on a real server at `TOLLGATE_TEST_REDIS_URL`, each
+    test with its own key prefix. When the marker is selected and the variable is missing, the tests fail;
+    they never skip.
+  - `ci.yml`: a `redis:7.4.12` service container with a `redis-cli ping` health check, and a step named
+    `redis integration` after the `check.py` mirror steps that runs `python -m pytest -m redis_server`. The job
+    name `lint and test` does not change.
+  - `docs/setup.md`: how to run those tests by hand against a local Redis, if the owner has one.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Locally and in `check.py`, the `redis_server` tests show as deselected and none as skipped.
+  2. On the PR, the `redis integration` step is green, and its log shows the shared suite's test count passed.
+  3. With the marker selected and no URL set, the run fails with a message naming `TOLLGATE_TEST_REDIS_URL`.
+  4. After the merge, README and ARCHITECTURE may say the limiter is tested against Redis 7.4.12 in CI, and
+     only that.
+- **Verification:** `python scripts/check.py` green; the CI log of the `redis integration` step; the
+  deselection count from a local run; `gh pr checks <n> --watch`.
+- **Branch and commits:** `ci/t-107-redis-integration`; `test(limits): run the shared suite on a real Redis
+  server`, `ci: add the redis integration step`, `docs(tasks): complete T-107`.
+- **Size:** about 80 lines.
+
+### T-108 - Rate limiting on chat completions
+
+- **Status:** todo
+- **Goal:** each chat completion reserves tokens before the provider call, settles after it, and answers with
+  the ADR-0008 headers, 429 and 502 responses.
+- **Context:** ADR-0007, ADR-0008, `app/api/chat.py`, `app/api/auth.py`, `app/limits/`, `app/settings.py`.
+- **Depends on:** T-103, T-104, T-105, T-106.
+- **Deliverables:**
+  - `create_app()` builds the limiter from `Settings` (`memory` or `redis`), with the injected clock.
+  - The route: authenticate, estimate, reserve; on refusal 429; otherwise call the provider, settle with its
+    `usage.total_tokens`, and on provider failure refund the whole reservation and return 502.
+  - `app/api/limit_headers.py`: builds the three `x-ratelimit-*-tokens` headers and `Retry-After` from a
+    `Decision`, including the `<m>m<s>s` duration format.
+  - The 429 and 502 responses and the headers in the OpenAPI document.
+- **Contract:** changes (429, 502 and the headers); regenerated snapshot in its own commit.
+- **Acceptance criteria:**
+  1. Under the limit: 200 with exact header values. Over it: 429 with the ADR-0008 body and `Retry-After`
+     rounded up. Larger than capacity: 429 without `Retry-After`.
+  2. After a 200, the remaining balance reflects the mock's reported usage, not the estimate.
+  3. A failing provider gives 502 with the ADR-0008 body, and the full reservation is refunded.
+  4. Reset durations format as `0s`, `45s`, `1m0s` and `6m0s` at those boundaries; remaining is never shown
+     below 0.
+  5. 401 responses and `/health` carry no limit headers.
+  6. With `TOLLGATE_LIMITER_BACKEND=redis`, the app uses `RedisRateLimiter` (tested with fakeredis).
+- **Verification:** `python scripts/check.py` green; mutation table (settle skipped, refund skipped,
+  `Retry-After` rounded down, header on the wrong decision value, duration format off by one at 60 seconds,
+  oversized `Retry-After` sent, backend selection ignored); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-108-rate-limited-chat`; `feat(api): add the rate-limit headers`,
+  `feat(api): reserve and settle tokens on chat completions`, `test(contract): update the OpenAPI snapshot
+  for rate limiting`, `docs(tasks): complete T-108`.
+- **Size:** about 300 lines plus the snapshot diff.
+
 ## Later phases (broken into tasks at each gate)
 
 | Phase | Epic |
 | --- | --- |
-| 1 | Token-aware rate limiting: token counting, Redis token bucket (client decided by ADR), 429 with rate-limit headers, mock provider, `/v1/chat/completions` |
+| 1 | Token-aware rate limiting: planned 2026-11-12 as T-101 to T-108 (see the current phase) |
 | 2 | Model routing: rules, fallback on provider failure, Ollama, then OpenAI and Anthropic adapters |
 | 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation |
 | 4 | Docker Compose, observability, reproducible load benchmarks |
@@ -207,7 +486,8 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 
 ### Requirements that carry into the task cards
 
-These are written into the cards when each phase is planned.
+These are written into the cards when each phase is planned. The two Phase 1 items are in ADR-0006, T-106 and
+T-107.
 
 - **Phase 1, Redis ADR first.** Before the Phase 1 ADR on how the rate limiter talks to Redis, the researcher
   checks, with sources, that every package the Redis and Lua tests would need has a prebuilt wheel for Windows
@@ -233,6 +513,8 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   hand today. A Dependabot configuration for the `github-actions` ecosystem would propose those updates as pull
   requests. It adds a configuration file to the repository, so it is a task of its own, with a check that the
   proposed updates keep the version comment next to each SHA.
+- **IETF RateLimit header fields:** emit `RateLimit` and `RateLimit-Policy` alongside the `x-ratelimit-*`
+  headers once draft-ietf-httpapi-ratelimit-headers becomes an RFC and has a unit for tokens (ADR-0008).
 
 ## Log
 
@@ -256,3 +538,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-12 | T-004 | `create_app()` and a typed `/health` response added; the OpenAPI snapshot `tests/contract/openapi.json` is committed and compared by `tests/test_openapi_snapshot.py`; only `scripts/regenerate_openapi.py` writes it. `scripts/check.py` and the `lint and test` job each run a named `contract` step, and the main pytest step ignores that file so no test runs twice. `.gitattributes` gained `tests/contract/*.json text eol=lf` at the owner's request. `scripts/check.py` passed (5 steps, 63 tests). Mutation check on scratch copies: renamed field, removed route, status code 201, `Literal` value changed and title changed were all caught; one survivor, removing `response_model` while keeping the return annotation, is an equivalent mutant (the generated document is byte-identical). A first round left two test-quality survivors (the canonical-format check could be made vacuous, and CRLF was normalised away); both are now caught. Criterion 5 was shown locally: a planted snapshot difference in a scratch copy fails `check.py` at `contract`. The CI red run was waived by the owner, so the first CI run on the pull request is the proof that the step is green | Verifier tables; `check.py` output |
 | 2026-11-12 | T-004 | Correction to the row above: the final count is 65 tests (14 in the `contract` step, 51 in the `pytest` step), and the mutation check ran in three rounds. Round one left two test-quality survivors (the canonical-format check could be made vacuous, and CRLF was normalised away). Round two, on the CRLF fix, left one more: `ensure_ascii=True` made no test fail because no input was non-ASCII. It is now caught by `test_is_canonical_keeps_non_ascii_characters_raw`. After the last round, six mutations of the canonical-format check (always true, `sort_keys` dropped, indent 4, no trailing newline, CRLF normalisation restored, `ensure_ascii=True`) are all caught, and so is a CRLF copy of the snapshot. The only survivor is the equivalent `response_model` mutant. `scripts/check.py` passed (5 steps) and the `lint and test` job was green on the last push | Verifier tables; `check.py` output; PR #9 checks |
 | 2026-11-12 | - | Phase 0 gate signed off by the owner: all seven gate items met. ADR-0004 and ADR-0005 accepted as written, no revisions. Gate check read back the same day: `protect-main` active with required check `lint and test` and no bypass actors; `ci` green on `main` at `f5c34f4`; 54 commits, all with the owner's author email, none with a trailer or attribution line | `gh api repos/apoorvrajdev/tollgate/rulesets/26862192`, `gh run list --branch main`, `git log` (read-only) |
+| 2026-11-12 | - | Phase 1 planned: cards T-101 to T-108, the Phase 1 gate and board rows; ADR-0006 (Redis client, Lua bucket, tests), ADR-0007 (estimate, token bucket, reserve and settle) and ADR-0008 (authentication, limit headers, errors) proposed. Package versions, licences and `cp313` wheel availability were checked against the PyPI JSON API on this date; nothing was installed | `docs/DECISIONS.md`; the planning pull request |
