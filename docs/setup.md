@@ -38,7 +38,7 @@ The project is run from the repository root and is not installed as a package (t
 
 ```bash
 python scripts/check.py
-uvicorn app.main:app --reload
+uvicorn --factory app.main:create_app --reload
 curl localhost:8000/health   # {"status":"ok"}
 ```
 
@@ -53,6 +53,30 @@ curl localhost:8000/health   # {"status":"ok"}
 | 5 | `pytest --ignore=tests/test_openapi_snapshot.py` (every other test) |
 
 Run it before every commit. To fix formatting, run `python -m ruff format .`.
+
+## Configuration
+
+The gateway reads its settings from environment variables when the app is built, and refuses to start if one is
+invalid. The error names the variable and the reason, never the value. API keys and the Redis URL are masked in
+`repr()` and never appear in error messages. Do not put real values in the repository.
+
+| Variable | Meaning | Default | Required |
+| --- | --- | --- | --- |
+| `TOLLGATE_API_KEYS` | Comma-separated API keys that clients may present; surrounding spaces are trimmed, empty keys are rejected | none | yes |
+| `TOLLGATE_TOKENS_PER_MINUTE` | Refill rate of each key's token bucket, as a whole number greater than 0 | none | yes |
+| `TOLLGATE_CAPACITY_TOKENS` | Bucket capacity in tokens, a whole number greater than 0 | the value of `TOLLGATE_TOKENS_PER_MINUTE` | no |
+| `TOLLGATE_LIMITER_BACKEND` | `memory` or `redis` (lower case, exact) | `memory` | no |
+| `TOLLGATE_REDIS_URL` | Redis connection URL; may contain a password | none | only when the backend is `redis` |
+
+Numbers are plain ASCII digits, at most 18: `1_000`, `1e3`, `1.5`, signs and spaces inside the number are
+rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
+
+Start the server through the app factory, with the variables set in your shell:
+
+```bash
+TOLLGATE_API_KEYS="<your keys>" TOLLGATE_TOKENS_PER_MINUTE=60000 \
+  uvicorn --factory app.main:create_app
+```
 
 ## Regenerating the OpenAPI snapshot
 
@@ -70,7 +94,7 @@ Review the resulting diff before committing it.
 
 Pins are exact and updated by hand, one task at a time. Use throwaway venvs, not the project one:
 
-1. In a new venv, install the runtime packages (`fastapi`, `uvicorn`) with `--only-binary=:all:`, run
+1. In a new venv, install the runtime packages (`fastapi`, `pydantic`, `uvicorn`) with `--only-binary=:all:`, run
    `pip freeze`, and write the result to `requirements.txt` under its two comment lines.
 2. In a second new venv, install the new `requirements.txt`, then `httpx`, `pytest`, `ruff` and `mypy`, run
    `pip freeze`, and put every line that is not in the runtime freeze into `requirements-dev.txt`, after
