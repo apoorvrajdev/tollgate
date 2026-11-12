@@ -108,7 +108,7 @@ Phases 1 to 5 are planned. Phase 0 is in progress. Details and acceptance criter
 
 | Phase | Scope | State |
 | --- | --- | --- |
-| 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000, T-001 and T-003 done; T-002 and T-004 todo |
+| 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000, T-001, T-002, T-003 and T-004 done |
 | 1 | Token-aware rate limiting: token counting, a token bucket on a shared store (Redis planned; an ADR decides the client), 429 with rate-limit headers, a mock provider, `/v1/chat/completions` | Planned |
 | 2 | Model routing: rules, fallback on provider failure, Ollama, then OpenAI and Anthropic adapters | Planned |
 | 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation, a minimal evaluation harness | Planned |
