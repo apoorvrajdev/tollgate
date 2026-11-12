@@ -10,8 +10,8 @@ Accepted decisions change only through a new ADR.
 | [0001](#adr-0001) | Single-author repository with enforced commit identity | Accepted | 2026-11-09 |
 | [0002](#adr-0002) | Pull-request delivery flow | Accepted | 2026-11-09 |
 | [0003](#adr-0003) | Python toolchain, one check command, plain pip | Accepted | 2026-11-09 |
-| [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Proposed | 2026-11-09 |
-| [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Proposed | 2026-11-09 |
+| [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
+| [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
 
 Open decision for Phase 1: how the rate limiter talks to Redis (client library, Lua scripts, test double).
 It gets its own ADR before any limiter code is written.
@@ -73,13 +73,13 @@ It gets its own ADR before any limiter code is written.
 
 ## ADR-0004
 
-**OpenAI-compatible API; providers added in a fixed order; no paid calls in tests** · Proposed · 2026-11-09
+**OpenAI-compatible API; providers added in a fixed order; no paid calls in tests** · Accepted · 2026-11-12
 
 - **Context:** Existing clients and SDKs already speak the OpenAI chat-completions format; a gateway that uses it
   needs no custom client. Provider calls cost money and are slow and nondeterministic.
 - **Options:** (a) a custom API; (b) OpenAI-compatible `/v1/chat/completions`; (c) one adapter per provider API
   exposed as-is.
-- **Decision (proposed):** (b).
+- **Decision:** (b).
   - Providers are added in this order: a mock provider, then Ollama (local), then OpenAI and Anthropic adapters.
   - Tests and CI use only the mock provider or recorded fakes. A real provider call happens only when the owner
     runs it by hand, with the owner's own keys.
@@ -89,11 +89,11 @@ It gets its own ADR before any limiter code is written.
 
 ## ADR-0005
 
-**Verification safeguards: contract snapshot, mutation checks, evidence-first numbers** · Proposed · 2026-11-09
+**Verification safeguards: contract snapshot, mutation checks, evidence-first numbers** · Accepted · 2026-11-12
 
 - **Context:** The project has no upstream baseline to freeze, and tests alone can pass vacuously.
 - **Options:** (a) rely on code review; (b) add automated safeguards for the contract, test quality and claims.
-- **Decision (proposed):** (b), in three parts.
+- **Decision:** (b), in three parts.
   1. **Contract snapshot.** The generated OpenAPI document is committed. A test compares it to the live app and
      fails on any difference. It is updated only in a task whose card says the contract changes.
   2. **Mutation checks.** For every task that adds tests, the verifier applies deliberate mutations to scratch
