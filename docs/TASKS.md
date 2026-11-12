@@ -36,7 +36,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 | T-001 | Toolchain: pyproject, pinned requirements, check script | 0 | done | - (ADR-0003 accepted) |
 | T-003 | Continuous integration | 0 | done | T-001 |
 | T-002 | Tests for the commit guards | 0 | done | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
-| T-004 | Typed app skeleton and OpenAPI snapshot | 0 | todo | T-001, T-003 |
+| T-004 | Typed app skeleton and OpenAPI snapshot | 0 | done | T-001, T-003 |
 
 ---
 
@@ -167,7 +167,7 @@ T-004. The rows below are in that order; the cards further down are listed by ID
 
 ### T-004 - Typed app skeleton and OpenAPI snapshot
 
-- **Status:** todo
+- **Status:** done
 - **Goal:** a typed app factory, a response model for `/health`, and a committed OpenAPI snapshot that tests
   compare against (ADR-0005, part 1).
 - **Context:** `app/main.py`, `tests/test_health.py`, ADR-0004, ADR-0005, ARCHITECTURE §4.
@@ -251,3 +251,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-10 | T-003 | Criterion 4 complete: the owner made `lint and test` a required status check in `protect-main`. Read back by id: the required check is `lint and test` from GitHub Actions (integration id 15368, which the apps API names `github-actions`); `bypass_actors` is empty and `current_user_can_bypass` is `never`; the `pull_request` rule is present with 0 required approvals and merge commits as the only allowed method; `non_fast_forward` blocks force pushes and `deletion` blocks deletion. `strict_required_status_checks_policy` is false, so a pull request need not be up to date with `main` to merge. The dependency of T-002 on the required check is met | `gh api repos/apoorvrajdev/tollgate/rulesets/26862192` (ruleset updated 2026-11-10 00:21 +05:30) and `gh api apps/github-actions`; the `lint and test` check run on `main` commit `1be7c61` came from app 15368 and succeeded |
 | 2026-11-09 | - | Exception: pull request #6 (a backlog-only docs change, the Dependabot item) was merged at 18:50:21Z by the owner, before `lint and test` became a required check (the ruleset was saved at 18:51:45Z). CI had passed on it first. Like #5, it was merged before the check was required, and unlike #1 to #4 it had CI | PR #6 merge time from `gh pr view 6`; CI run `42676255873` (success); ruleset `updated_at` 2026-11-10T00:21:45+05:30 |
 | 2026-11-10 | T-002 | Guard tests added; `scripts/check.py` passed 10 runs in a row (50 tests). Mutation check: 30 mutations of scratch copies of the hooks (each pattern or rule removed, `/i` dropped, anchors loosened or removed, comment skip removed, exit codes inverted, backslash normalisation removed); the first round left 10 survivors (comment skip, five loosened anchors, four dropped `/i` on path rules), closed by samples in a second round, after which all 30 were caught. Run with `node` off PATH, 39 tests error with the Node.js message and none skip. Reviewer APPROVE with three Minor findings | Verifier tables, two rounds; the pull request's `lint and test` run (criterion 6) is recorded in the pull request |
+| 2026-11-12 | T-004 | `create_app()` and a typed `/health` response added; the OpenAPI snapshot `tests/contract/openapi.json` is committed and compared by `tests/test_openapi_snapshot.py`; only `scripts/regenerate_openapi.py` writes it. `scripts/check.py` and the `lint and test` job each run a named `contract` step, and the main pytest step ignores that file so no test runs twice. `.gitattributes` gained `tests/contract/*.json text eol=lf` at the owner's request. `scripts/check.py` passed (5 steps, 63 tests). Mutation check on scratch copies: renamed field, removed route, status code 201, `Literal` value changed and title changed were all caught; one survivor, removing `response_model` while keeping the return annotation, is an equivalent mutant (the generated document is byte-identical). A first round left two test-quality survivors (the canonical-format check could be made vacuous, and CRLF was normalised away); both are now caught. Criterion 5 was shown locally: a planted snapshot difference in a scratch copy fails `check.py` at `contract`. The CI red run was waived by the owner, so the first CI run on the pull request is the proof that the step is green | Verifier tables; `check.py` output |
