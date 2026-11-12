@@ -104,11 +104,11 @@ Planned measurements: rate-limiter behaviour against a real Redis in CI (Phase 1
 
 ## Roadmap
 
-Phases 1 to 5 are planned. Phase 0 is in progress. Details and acceptance criteria are in [`docs/TASKS.md`](docs/TASKS.md).
+Phases 1 to 5 are planned. Phase 0 is complete. Details and acceptance criteria are in [`docs/TASKS.md`](docs/TASKS.md).
 
 | Phase | Scope | State |
 | --- | --- | --- |
-| 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000, T-001 and T-003 done; T-002 and T-004 todo |
+| 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000, T-001, T-002, T-003 and T-004 done |
 | 1 | Token-aware rate limiting: token counting, a token bucket on a shared store (Redis planned; an ADR decides the client), 429 with rate-limit headers, a mock provider, `/v1/chat/completions` | Planned |
 | 2 | Model routing: rules, fallback on provider failure, Ollama, then OpenAI and Anthropic adapters | Planned |
 | 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation, a minimal evaluation harness | Planned |
@@ -132,8 +132,8 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 | | Built today | Planned |
 | --- | --- | --- |
 | **Language and API** | Python 3.13, FastAPI 0.162.2, uvicorn 0.54.0 | OpenAI-compatible chat completions |
-| **Quality** | pytest 9.2.0, httpx 0.28.1, ruff 0.17.4, mypy 2.4.1 (strict); CI on Python 3.13 in GitHub Actions | OpenAPI snapshot test (T-004) |
-| **Commit guards** | Node.js scripts in `.githooks/` | Tests for them (T-002) |
+| **Quality** | pytest 9.2.0, httpx 0.28.1, ruff 0.17.4, mypy 2.4.1 (strict); OpenAPI snapshot test; CI on Python 3.13 in GitHub Actions | None |
+| **Commit guards** | Node.js scripts in `.githooks/`, with tests | None |
 | **State and providers** | None | Redis (pending the Phase 1 ADR); mock, Ollama, OpenAI and Anthropic adapters |
 | **Operations** | None | Docker Compose, metrics, structured logs (Phase 4) |
 
