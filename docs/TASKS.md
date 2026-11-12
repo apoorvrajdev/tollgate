@@ -58,7 +58,7 @@ cards further down are listed by ID.
 | T-003 | Continuous integration | 0 | done | T-001 |
 | T-002 | Tests for the commit guards | 0 | done | T-003, and `lint and test` set as a required check (OWNER-CHECK) |
 | T-004 | Typed app skeleton and OpenAPI snapshot | 0 | done | T-001, T-003 |
-| T-101 | Injected clock and validated settings | 1 | todo | Phase 0 gate |
+| T-101 | Injected clock and validated settings | 1 | done | Phase 0 gate |
 | T-102 | Chat completions endpoint with a mock provider | 1 | todo | T-101; ADR-0008 accepted 2026-11-12 |
 | T-103 | API key authentication | 1 | todo | T-101, T-102; ADR-0008 accepted 2026-11-12 |
 | T-104 | Token estimator | 1 | todo | T-102; ADR-0007 accepted 2026-11-12 |
@@ -224,7 +224,7 @@ cards further down are listed by ID.
 
 ### T-101 - Injected clock and validated settings
 
-- **Status:** todo
+- **Status:** done
 - **Goal:** time and configuration reach the app through `create_app()`, so later tasks can use a fake clock
   and per-test settings instead of globals.
 - **Context:** `app/main.py`, `tests/test_health.py`, ARCHITECTURE §3 and §6, CLAUDE.md §8.
@@ -538,3 +538,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-12 | T-004 | Correction to the row above: the final count is 65 tests (14 in the `contract` step, 51 in the `pytest` step), and the mutation check ran in three rounds. Round one left two test-quality survivors (the canonical-format check could be made vacuous, and CRLF was normalised away). Round two, on the CRLF fix, left one more: `ensure_ascii=True` made no test fail because no input was non-ASCII. It is now caught by `test_is_canonical_keeps_non_ascii_characters_raw`. After the last round, six mutations of the canonical-format check (always true, `sort_keys` dropped, indent 4, no trailing newline, CRLF normalisation restored, `ensure_ascii=True`) are all caught, and so is a CRLF copy of the snapshot. The only survivor is the equivalent `response_model` mutant. `scripts/check.py` passed (5 steps) and the `lint and test` job was green on the last push | Verifier tables; `check.py` output; PR #9 checks |
 | 2026-11-12 | - | Phase 0 gate signed off by the owner: all seven gate items met. ADR-0004 and ADR-0005 accepted as written, no revisions. Gate check read back the same day: `protect-main` active with required check `lint and test` and no bypass actors; `ci` green on `main` at `f5c34f4`; 54 commits, all with the owner's author email, none with a trailer or attribution line | `gh api repos/apoorvrajdev/tollgate/rulesets/26862192`, `gh run list --branch main`, `git log` (read-only) |
 | 2026-11-12 | - | Phase 1 planned: cards T-101 to T-108, the Phase 1 gate and board rows; ADR-0006 (Redis client, Lua bucket, tests), ADR-0007 (estimate, token bucket, reserve and settle) and ADR-0008 (authentication, limit headers, errors) proposed. Package versions, licences and `cp313` wheel availability were checked against the PyPI JSON API on this date; nothing was installed | `docs/DECISIONS.md`; the planning pull request |
+| 2026-11-12 | T-101 | Injected `Clock` and `SystemClock` (`app/clock.py`), frozen `Settings` read from the environment with masked keys and variable-naming errors (`app/settings.py`), `create_app(settings, clock)` with no module-level `app`; pydantic added as a direct runtime dependency (already pinned in `requirements.txt`). Criterion 5 (`uvicorn --factory`) is an OWNER-CHECK, pending | `scripts/check.py` green (123 tests, snapshot unchanged); 26 mutations, all killed after one test fix |
