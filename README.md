@@ -104,7 +104,7 @@ Planned measurements: rate-limiter behaviour against a real Redis in CI (Phase 1
 
 ## Roadmap
 
-Phases 1 to 5 are planned. Phase 0 is in progress. Details and acceptance criteria are in [`docs/TASKS.md`](docs/TASKS.md).
+Phases 1 to 5 are planned. Phase 0 is complete. Details and acceptance criteria are in [`docs/TASKS.md`](docs/TASKS.md).
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -132,8 +132,8 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 | | Built today | Planned |
 | --- | --- | --- |
 | **Language and API** | Python 3.13, FastAPI 0.162.2, uvicorn 0.54.0 | OpenAI-compatible chat completions |
-| **Quality** | pytest 9.2.0, httpx 0.28.1, ruff 0.17.4, mypy 2.4.1 (strict); CI on Python 3.13 in GitHub Actions | OpenAPI snapshot test (T-004) |
-| **Commit guards** | Node.js scripts in `.githooks/` | Tests for them (T-002) |
+| **Quality** | pytest 9.2.0, httpx 0.28.1, ruff 0.17.4, mypy 2.4.1 (strict); OpenAPI snapshot test; CI on Python 3.13 in GitHub Actions | None |
+| **Commit guards** | Node.js scripts in `.githooks/`, with tests | None |
 | **State and providers** | None | Redis (pending the Phase 1 ADR); mock, Ollama, OpenAI and Anthropic adapters |
 | **Operations** | None | Docker Compose, metrics, structured logs (Phase 4) |
 
