@@ -53,6 +53,18 @@ curl localhost:8000/health   # {"status":"ok"}
 
 Run it before every commit. To fix formatting, run `python -m ruff format .`.
 
+## Regenerating the OpenAPI snapshot
+
+`tests/contract/openapi.json` is the committed OpenAPI document (ADR-0005). `tests/test_openapi_snapshot.py`
+compares it to the live app and fails on any difference. Tests and `scripts/check.py` never write it. Only this
+command does, and only in a task whose card says the contract changes:
+
+```bash
+.venv/Scripts/python scripts/regenerate_openapi.py
+```
+
+Review the resulting diff before committing it.
+
 ## Updating pins
 
 Pins are exact and updated by hand, one task at a time. Use throwaway venvs, not the project one:
