@@ -242,6 +242,9 @@ ADR-0006 must be accepted before any Redis package is added or any limiter code 
   - **400.** Invalid requests get `type: "invalid_request_error"`, with `param` naming the field when known.
     `stream: true` is rejected with `code: "unsupported_parameter"` and `param: "stream"`, because streaming is
     out of scope (ADR-0004). FastAPI's default 422 validation response is replaced by this 400 shape.
+  - **502.** If the provider fails, the reservation is refunded (ADR-0007) and the response is 502 with
+    `type: "api_error"`, `code: "provider_error"` and `param: null`. The message does not include provider
+    internals, and the limit headers are still sent.
   - The error shapes and headers appear in the OpenAPI document, so the snapshot (ADR-0005) records them.
 - **Consequences:**
   - The official SDK raises its usual typed errors and retries 429 by itself.
