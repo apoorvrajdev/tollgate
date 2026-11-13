@@ -4,26 +4,11 @@ The reply and the usage depend only on the request. Time comes from the injected
 response id from the injected IdSource, so a fixed clock and id source give identical responses.
 """
 
-import uuid
-from typing import Protocol
-
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.clock import Clock
+from app.providers.ids import IdSource
 
 REPLY_PREFIX = "Mock reply: "
-
-
-class IdSource(Protocol):
-    def next_id(self) -> str:
-        """A response id, unique per call."""
-        ...
-
-
-class UuidIdSource:
-    """Random ids for running the gateway. Tests inject a fixed source instead."""
-
-    def next_id(self) -> str:
-        return f"chatcmpl-{uuid.uuid4().hex}"
 
 
 def count_words(text: str) -> int:

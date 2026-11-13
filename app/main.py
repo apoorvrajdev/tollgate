@@ -16,7 +16,8 @@ from app.limits.limiter import RateLimiter
 from app.limits.memory import InMemoryRateLimiter
 from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
 from app.providers.base import Provider
-from app.providers.mock import MockProvider, UuidIdSource
+from app.providers.ids import UuidIdSource
+from app.providers.mock import MockProvider
 from app.routing.config import ROUTES_FILE_VAR, MockProviderConfig, RouteTable, format_path
 from app.routing.router import TableRouter
 from app.settings import (
