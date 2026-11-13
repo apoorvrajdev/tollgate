@@ -37,14 +37,15 @@ from app.settings import (
     SettingsError,
 )
 
-# Provider types this build can serve. Each adapter task adds its type (T-204 to T-206).
+# Provider types this build can serve. The OpenAI and Anthropic adapter tasks add theirs (T-205,
+# T-206).
 BUILT_PROVIDER_TYPES = ("mock", "ollama")
 # The connect timeout is fixed; `timeout_seconds` covers reads, writes and the pool (ADR-0010).
 CONNECT_TIMEOUT_SECONDS = MIN_TIMEOUT_SECONDS
 
 
 class AsyncCloseable(Protocol):
-    """A client the app closes at shutdown: a Redis client, and later an httpx.AsyncClient."""
+    """A client the app closes at shutdown: a Redis client or an httpx.AsyncClient."""
 
     async def aclose(self) -> None: ...
 
@@ -191,7 +192,8 @@ def create_app(
     resolved_clock = clock if clock is not None else SystemClock()
     application.state.settings = resolved_settings
     application.state.clock = resolved_clock
-    # Built before the limiter, so a startup error never leaves a Redis client behind.
+    # The providers are built before the limiter, so a limiter error never leaves a Redis client
+    # behind; an HTTP client built by then is unopened, and nothing needs to close it.
     providers_build = build_providers(resolved_settings.route_table, resolved_clock, http_transport)
     registry = providers_build.providers
     application.state.owned_clients.extend(providers_build.built_clients)

@@ -96,8 +96,9 @@ startup with `TOLLGATE_ROUTES_FILE: providers.<name>.type: is not built yet` (ch
 its `api_key_env` variables, so a missing key is reported first), and the example below starts only once
 those adapters exist. An `ollama` provider talks to `base_url` (default `http://localhost:11434`) through
 Ollama's native `POST /api/chat`; `timeout_seconds` applies to each read, write and pool wait, and connecting
-always waits at most 5 seconds. The gateway checks nothing about `base_url` at startup: a malformed one fails
-when the first request uses it.
+always waits at most 5 seconds. The gateway checks nothing about `base_url` at startup (an empty one counts as not given): a
+malformed one fails when the first request uses it. Credentials in `base_url` are sent as HTTP Basic
+authentication and are not treated as secrets by the gateway.
 
 ```json
 {
