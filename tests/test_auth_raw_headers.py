@@ -118,8 +118,17 @@ def test_a_utf16_encoded_header_name_is_not_authorization() -> None:
         b"Bearerx test-key",
         b"Bearer \ttest-key",
         b"Bearer \t test-key",
+        b"\xc2\xa0Bearer test-key",
+        b" test-key",
     ],
-    ids=["trailing NBSP", "scheme with extra letter", "space then tab", "space tab space"],
+    ids=[
+        "trailing NBSP",
+        "scheme with extra letter",
+        "space then tab",
+        "space tab space",
+        "leading NBSP before the scheme",
+        "empty scheme",
+    ],
 )
 def test_whitespace_and_scheme_variants_that_reach_the_app_get_401(value: bytes) -> None:
     assert status_for("test-key", value) == 401
@@ -128,6 +137,11 @@ def test_whitespace_and_scheme_variants_that_reach_the_app_get_401(value: bytes)
 @pytest.mark.parametrize("name", [b"x-authorization", b"proxy-authorization", b"authorization-x"])
 def test_other_headers_are_not_treated_as_authorization(name: bytes) -> None:
     assert status_for("test-key", b"Bearer test-key", name=name) == 401
+
+
+def test_a_key_with_an_internal_space_authenticates_only_with_that_space() -> None:
+    assert status_for("a key", b"Bearer a key") == 200
+    assert status_for("a key", b"Bearer akey") == 401
 
 
 def test_a_utf8_key_sent_as_utf8_bytes_authenticates() -> None:

@@ -94,6 +94,29 @@ def test_a_configured_key_is_matched_exactly_including_its_spaces() -> None:
         make_authenticator(" key").authenticate(["Bearer key"])
 
 
+@pytest.mark.parametrize(
+    "value",
+    [" Bearer test-key", "\tBearer test-key", "\xa0Bearer test-key", " test-key"],
+    ids=["space before scheme", "tab before scheme", "NBSP before scheme", "empty scheme"],
+)
+def test_leading_whitespace_before_the_scheme_is_rejected(value: str) -> None:
+    with pytest.raises(InvalidApiKeyError):
+        make_authenticator("test-key").authenticate([value])
+
+
+def test_a_configured_key_with_an_internal_space_is_matched_with_that_space() -> None:
+    # Settings keeps internal spaces: it splits the variable on commas only.
+    assert make_authenticator("a key").authenticate(["Bearer a key"]).caller_id
+    with pytest.raises(InvalidApiKeyError):
+        make_authenticator("a key").authenticate(["Bearer akey"])
+
+
+@pytest.mark.parametrize("value", ["Bearer test-key", "Bearer "])
+def test_an_authenticator_with_no_keys_rejects_everything(value: str) -> None:
+    with pytest.raises(InvalidApiKeyError):
+        make_authenticator().authenticate([value])
+
+
 def test_an_empty_configured_key_never_authenticates() -> None:
     with pytest.raises(InvalidApiKeyError):
         make_authenticator("").authenticate(["Bearer "])
