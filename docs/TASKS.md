@@ -95,8 +95,8 @@ number order. The rows below are in delivery order; the cards further down are l
 | T-107 | Real Redis in CI | 1 | done | T-106 |
 | T-108 | Rate limiting on chat completions | 1 | done | T-103, T-104, T-105, T-106 |
 | T-201 | Provider errors and the route table | 2 | done | Phase 1 gate; ADR-0010 and ADR-0011 accepted 2026-11-13 |
-| T-202 | Routing and fallback on chat completions | 2 | todo | T-201 |
-| T-203 | Close the clients the app builds on shutdown | 2 | todo | T-202 |
+| T-202 | Routing and fallback on chat completions | 2 | done | T-201 |
+| T-203 | Close the clients the app builds on shutdown, and check provider names | 2 | todo | T-202 |
 | T-204 | Ollama adapter | 2 | todo | T-203 |
 | T-205 | OpenAI adapter | 2 | todo | T-204 |
 | T-206 | Anthropic adapter | 2 | todo | T-204 |
@@ -639,7 +639,11 @@ number order. The rows below are in delivery order; the cards further down are l
 
 ### T-202 - Routing and fallback on chat completions
 
-- **Status:** todo
+- **Status:** done (2026-11-14)
+- **Clarified by the owner at plan review (2026-11-14):** the plan came to about 720 hand-written lines across
+  12 files, approved; a `bad_response` from a later target, after a fallback, is also charged as reserved
+  (ADR-0010 as written); the OpenAPI response-set test is renamed to include 404; `docs/setup.md` says that
+  only the `mock` type is built until T-204 to T-206.
 - **Goal:** each chat completion is routed by its `model` and falls back along its route on retryable
   failures, with one reservation and one settle.
 - **Context:** ADR-0007, ADR-0008, ADR-0010, ADR-0011, `app/api/chat.py`, `app/main.py`, `app/routing/`,
@@ -702,18 +706,26 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Size:** about 400 lines plus the snapshot diff; the card most likely to run over, so its plan is shown to
   the owner if it does.
 
-### T-203 - Close the clients the app builds on shutdown
+### T-203 - Close the clients the app builds on shutdown, and check provider names
 
 - **Status:** todo
 - **Goal:** the app closes every client it builds when it shuts down, starting with the Redis client built from
-  the URL (the first known gap in the T-108 Log), so the adapter tasks only register their HTTP clients.
-- **Context:** `app/main.py`, `tests/test_app_wiring.py`, `tests/test_chat_rate_limits.py`.
+  the URL (the first known gap in the T-108 Log), so the adapter tasks only register their HTTP clients. A
+  provider name that cannot be sent as the `x-tollgate-provider` header stops the app at startup (the first
+  known gap in the T-202 Log, folded into this card by the owner on 2026-11-14).
+- **Context:** `app/main.py`, `app/routing/config.py`, `tests/test_app_wiring.py`,
+  `tests/test_chat_rate_limits.py`, `tests/test_route_table.py`, ADR-0011.
 - **Depends on:** T-202.
 - **Deliverables:**
   - A list of owned clients on `app.state`, which `create_app()` appends to whenever it builds a client
     (T-204 appends its HTTP clients the same way), and an app lifespan that, on shutdown, closes every client in
     that list in the reverse order of building and continues past a client whose close raises. The Redis client
     built with `from_url` is appended; an injected client is not.
+  - `app/routing/config.py` rejects a provider name that is not made only of visible ASCII characters (`\x21` to
+    `\x7e`, so no space, control character, CR, LF or non-ASCII character), next to the existing empty-name
+    check. The error is a `SettingsError` naming `TOLLGATE_ROUTES_FILE` and the path `providers` with a fixed
+    reason, and never the name itself, since the name is the value that cannot be printed safely.
+    `docs/setup.md` states the rule.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. With the redis backend and no injected client, the client built from the URL is closed when the app shuts
@@ -722,12 +734,18 @@ number order. The rows below are in delivery order; the cards further down are l
   3. With two clients in the owned list, both are closed in reverse order, and a close that raises does not stop the
      other.
   4. The memory backend builds nothing and closes nothing.
+  5. A route file whose provider name contains a space, `\x7f`, a non-ASCII character, CR, LF or another control
+     character fails at startup with the `SettingsError` above, and the message does not contain the name; a
+     name using every visible ASCII character from `\x21` to `\x7e` is accepted and served, with that name in
+     `x-tollgate-provider`.
 - **Verification:** `python scripts/check.py` green; mutation table (the lifespan never closes, the injected
   client closed, the order not reversed, the first failing close stopping the rest, the memory backend
-  registering a client); `gh pr checks <n> --watch`.
+  registering a client, the name check skipped, the range widened to allow a space or `\x7f` or non-ASCII, the
+  range narrowed to reject `\x21` or `\x7e`, the name echoed in the message); `gh pr checks <n> --watch`.
 - **Branch and commits:** `feat/t-203-client-shutdown`; `feat(app): close the clients the app builds on
-  shutdown`, `docs(tasks): complete T-203`.
-- **Size:** about 150 lines.
+  shutdown`, `fix(routing): reject provider names that cannot be sent as a header`, `docs(tasks): complete
+  T-203`.
+- **Size:** about 200 lines.
 
 ### T-204 - Ollama adapter
 
@@ -965,3 +983,5 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-13 | - | Phase 2 planned: cards T-201 to T-207, the Phase 2 gate and board rows; ADR-0010 (plain httpx adapters, translation rules, failure taxonomy, `bad_response` charged as reserved, amending ADR-0007 and ADR-0008) and ADR-0011 (route table file, ordered fallback on retryable failures, 404 for an unknown model, two response headers, amending ADR-0008) proposed. A review of the first draft found that T-202 overstated which existing tests pass unchanged, that both ADRs amended ADR-0008 without saying so, and that the Anthropic card added a failure rule the ADR did not have; all were corrected in the planning pull request before it went to the owner, and the client-shutdown work was split out of the Ollama card. Research checked on this date: package versions, licences, dependencies and wheels against the PyPI JSON API (moving httpx 0.28.1 to runtime adds no package; the official SDKs would add 8, built on `httpx2`, and retry by default; `tiktoken` would add 5 and its encoding files' licence is still unstated); Ollama, OpenAI and Anthropic request, response and error formats in their documentation and source; fallback behaviour in LiteLLM, OpenRouter, Portkey, Kong and Envoy AI Gateway documentation and source. Nothing was installed. Of the T-108 known gaps, the unclosed Redis client is closed in T-203, and a negative count from an HTTP adapter becomes `bad_response` (ADR-0010; a negative count from the mock or an injected provider still makes `settle` raise); gaps 2 to 5 are backlog items | `docs/DECISIONS.md`; the planning pull request |
 | 2026-11-13 | - | Decisions by the owner: ADR-0010 and ADR-0011 accepted as written, no revisions. ADR-0007's status is now "Accepted - amended by ADR-0010" and ADR-0008's "Accepted - amended by ADR-0009, ADR-0010 and ADR-0011". The Phase 2 gate item for the ADRs is ticked; T-201 can start once the planning pull request merges | `docs/DECISIONS.md` (index and ADR headers); commit `7f89231` |
 | 2026-11-13 | T-201 | `app/providers/errors.py` (`ProviderError` with the five ADR-0010 kinds; `retryable` for connection, timeout, rate_limited and upstream_status from 500) and `app/routing/config.py` (strict pydantic models with one model per provider type, a read-only `RouteTable`, the built-in table of one `mock` provider and a default route to it) added; `Settings.from_env` reads the table and its keys from the same mapping, so a bad table stops `create_app()` at startup. Errors name the variable and a field path with a fixed reason per error type; pydantic's own messages are never used, because some echo the input. Owner decisions at plan review and after it: `api_key_env` must be a variable name, a blank variable is an error, UTF-8 without a byte order mark, an unreadable file is reported without its path, and empty provider names, aliases and upstream models are rejected. `app/main.py` and the contract are unchanged; no dependency added. `scripts/check.py` passed (14 contract and 787 other tests). The change is about 1,113 added lines (355 code, 718 tests, 40 docs), against about 650 approved at plan review; the difference is the tests added in review and verification, the empty-name rules, and formatting. Mutation check on scratch copies: 64 mutants, 62 caught; the 2 survivors (removing `from None` on two inner re-raises) are equivalent, because the raised `SettingsError` keeps its own suppression and its message and formatted traceback are unchanged. One feedback iteration. Review found that a duplicate key's dropped value could be freed and its `id` reused, giving a wrong path (fixed by keeping every parsed object alive); that the recursive duplicate walk raised `RecursionError` between depths 1000 and 2999, which the JSON parser accepts (now iterative); that a test nesting 5000 levels would have passed on Windows and failed on Linux, where the parser's limit is higher (now 100,000); and that the walk's order was not pinned (two tests). Verification found that a NUL in the path raised a raw `ValueError` (now caught) and that `sk-` placeholders tripped the secret search (replaced). The first verifier run stalled after its driver crashed on three parallel test runs that timed out; the 14 unfinished mutants were re-run one at a time with a timeout and none hung | Verifier tables; `check.py` output; `gh pr checks` is recorded in the pull request |
+| 2026-11-14 | T-202 | Chat completions are routed. `app/routing/router.py` adds `Route` (an ordered tuple of targets), the `Router` protocol and `TableRouter` (exact alias, else the default route, else `UnknownModelError`), and `run_route`, which tries each target once, in order, with the request's `model` replaced by the target's upstream model (the client's when it has none, never changing the client's request), moves on only after a retryable `ProviderError`, and returns `Served` (completion, provider name, fallbacks) or `RouteFailed` (charged only for `bad_response`, also after a fallback). `create_app()` builds the provider registry on `app.state.providers` (one `MockProvider` on the injected clock per `mock` entry; any other type is a startup `SettingsError` on `TOLLGATE_ROUTES_FILE` naming `providers.<name>.type`), with `provider=` setting the `mock` entry and a new `providers=` keyword setting entries by name, and a `TableRouter` on `app.state.router`. The route reads both from `app.state` per request, selects before any estimate or reservation (404 `model_not_found`, `param: model`, a fixed message, no limit headers), settles once with the serving attempt's usage, refunds a failed route in full and charges a `bad_response` as reserved (502 either way), and adds `x-tollgate-provider` and `x-tollgate-fallbacks` to a 200 only. The snapshot gains the 404, the two headers and the new 502 description. `scripts/check.py` passed: 14 contract and 838 other tests, 45 deselected. Mutation table, one mutant at a time on scratch copies: 50 mutants (the card's 14 plus 36 more, among them a loosened alias match, an in-place request change, a later `bad_response` refunded, each unbuilt type accepted, injection order, the router or registry captured at startup, table mocks on the system clock, selection before authentication or validation, routing headers on a 502 or 429, and the 404 status, code, param and OpenAPI entry); 49 killed in round one. The survivor, routing headers on a 429, was killed after `test_refused_request_on_a_route_gets_429_without_routing_headers_or_a_provider_call` was added (rerun on its own) | `tests/test_router.py`, `tests/test_chat_routing.py`; `gh pr checks` is recorded in the pull request |
+| 2026-11-14 | T-202 | Known gaps from review: (1), folded into T-203 by the owner, a provider name that is not a valid header value (characters outside latin-1, or CR or LF) passes the route table checks, and the 200 then fails with a 500 after the provider answered and settle ran, so the caller is charged without an answer; the fix is a startup check on provider names; (2) `provider=` adds a `mock` entry even when a route file names no such provider, which nothing routes to. Unchanged from T-108: a provider name missing from the registry (only possible by editing `app.state.providers`) is a 500 after the reservation, never a refund | Reviewer findings |

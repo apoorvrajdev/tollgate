@@ -381,6 +381,18 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "x-tollgate-fallbacks": {
+                "description": "The number of failed attempts before the one that served the request",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-tollgate-provider": {
+                "description": "The configured name of the provider that served the request",
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -411,6 +423,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No route serves the requested model; nothing was reserved"
           },
           "429": {
             "content": {
@@ -456,7 +478,7 @@
                 }
               }
             },
-            "description": "The provider failed; the reservation was refunded",
+            "description": "The route ended without an answer: a provider failure is refunded in full, and an answer that could not be translated is charged as reserved",
             "headers": {
               "x-ratelimit-limit-tokens": {
                 "description": "The bucket capacity in tokens",

@@ -89,8 +89,12 @@ rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 ### Route table
 
 The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully
-checked when the settings are read, so a broken file stops the gateway at startup. Requests are not routed by
-it yet; that arrives in T-202, and only the `mock` type is served until the adapter tasks.
+checked when the settings are read, so a broken file stops the gateway at startup. Each request is routed by
+its `model` and falls back to the next target on a retryable provider failure. Only the `mock` type is built
+until the adapter tasks (T-204 to T-206): a file naming `ollama`, `openai` or `anthropic` stops the gateway at
+startup with `TOLLGATE_ROUTES_FILE: providers.<name>.type: is not built yet` (checked after the file and
+its `api_key_env` variables, so a missing key is reported first), and the example below starts only once
+those adapters exist.
 
 ```json
 {

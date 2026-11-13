@@ -22,7 +22,9 @@ It is a portfolio project. Every performance or cost claim must come from a repr
 ```mermaid
 flowchart TB
   C[Client] --> V[Validate and authenticate]
-  V --> E[Estimate input tokens]
+  V --> SEL{Select route}
+  SEL -- no route --> R404[404 model_not_found]
+  SEL -- route --> E[Estimate input tokens]
   E --> RL{Rate limiter<br/>reserve tokens}
   RL -- over limit --> R429[429 with retry hints]
   RL -- allowed --> SC{Semantic cache}
@@ -39,15 +41,15 @@ flowchart TB
 | Providers | Adapters behind one interface: mock, then Ollama, then OpenAI and Anthropic | Phase 1-2 |
 | Token counting | Estimate before the call, settle with the provider's reported usage after | Phase 1 |
 | Rate limiter | Per-key token bucket, state in Redis through redis-py and one Lua script (ADR-0006) | Phase 1 |
-| Router | Rule-based choice of provider and model, with fallback when a provider fails | Phase 2 |
+| Router | Route table by model alias (ADR-0011); targets tried in order, each once, moving on only after a retryable failure (ADR-0010); a failed route is refunded, an untranslatable answer charged | Phase 2 |
 | Semantic cache | Embedding of the prompt, similarity lookup, thresholds and invalidation | Phase 3 |
 | Operations | Docker Compose, metrics, structured logs, load benchmarks | Phase 4 |
 
 ## 3. Core interfaces (target, Phase 1 onwards)
 
 Names are final once an ADR or task card fixes them. `Clock`, `Provider`, `TokenEstimator`,
-`reserved_tokens`, `Decision` and `RateLimiter` are final (tasks T-101 to T-105); `Router` and
-`SemanticCache` are still illustrative.
+`reserved_tokens`, `Decision` and `RateLimiter` are final (tasks T-101 to T-105); `ProviderError`,
+`Route` and `Router` are final (T-201, T-202); `SemanticCache` is still illustrative.
 
 ```python
 class Clock(Protocol):
@@ -74,8 +76,20 @@ class RateLimiter(Protocol):
     async def reserve(self, key: str, estimated_tokens: int) -> Decision: ...
     async def settle(self, key: str, reserved_tokens: int, actual_tokens: int) -> None: ...
 
+class ProviderError(Exception):
+    kind: ProviderErrorKind                    # connection, timeout, rate_limited,
+                                               # upstream_status, bad_response
+    status_code: int | None
+    @property
+    def retryable(self) -> bool: ...           # connection, timeout, rate_limited, and
+                                               # upstream_status from 500 up
+
+type Route = tuple[TargetConfig, ...]          # ordered targets: a provider name and an
+                                               # optional upstream model
+
 class Router(Protocol):
-    def select(self, request: ChatRequest) -> Route: ...
+    def select(self, request: ChatRequest) -> Route: ...   # alias, else default,
+                                                           # else UnknownModelError
 
 class SemanticCache(Protocol):
     async def get(self, request: ChatRequest) -> ChatResponse | None: ...
@@ -107,11 +121,12 @@ Package layout inside `app/` is decided per phase. Current: `app/api/` (request 
 body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
 `app/providers/` (the `Provider` protocol, `MockProvider`, and `ProviderError` with its failure kinds in
 `errors.py`), `app/routing/` (`config.py`: the route table file, validated when the settings are read, and the
-built-in table; nothing routes with it yet), `app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
+built-in table; `router.py`: `Route`, `Router`, `TableRouter` and `run_route`, the ordered fallback loop),
+`app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
 fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
-behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: the router
-in `routing/` (T-202), `cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
+behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: `cache/`.
+The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
 without a key never sees a validation error, and the `require_api_key` dependency returns the caller identity
@@ -120,12 +135,22 @@ and makes the OpenAPI document record the bearer scheme.
 `create_app()` also builds the `HeuristicEstimator` and the limiter chosen by `TOLLGATE_LIMITER_BACKEND`, on
 the injected clock, and keeps them on `app.state`: `InMemoryRateLimiter`, or `RedisRateLimiter` on an optional
 injected Redis client (tests pass fakeredis) or one built from `TOLLGATE_REDIS_URL`, kept on
-`app.state.redis_client`. The chat route reserves the estimate plus the completion allowance under the caller
-id, answers a refusal with 429, settles with the provider's `usage.total_tokens`, and refunds the whole
-reservation when the provider raises (502). Only the provider call is guarded, so a limiter error is a 500,
-never a refund. The limit headers come from the `Decision` that `reserve` returned, so a 200 shows the
-balance after the reservation and a 502 the balance before the refund; the next request sees the settled
-balance.
+`app.state.redis_client`. It also builds the provider registry (provider name to `Provider`, one
+`MockProvider` on the injected clock per `mock` entry of the route table; any type not built yet stops
+startup with a `SettingsError` on `TOLLGATE_ROUTES_FILE`) and a `TableRouter` on the route table, kept on
+`app.state.providers` and `app.state.router`. The `provider=` keyword sets the entry named `mock` and
+`providers=` then sets entries by name; an entry the route table does not name is never routed to. The chat route reads the registry, the router and the
+limiter from `app.state` on every request. It selects the route first, answering a model that no route
+serves with the ADR-0011 404 before any estimate or reservation, and with no limit headers. It then
+reserves the estimate plus the completion allowance under the caller id and answers a refusal with 429.
+`run_route` tries each target once, in order, with the request's `model` replaced by the target's upstream
+model (the client's when it has none), and moves on only after a retryable `ProviderError`. A 200 settles
+once with the serving attempt's `usage.total_tokens`, keeps the body `model` the provider reported, and
+carries `x-tollgate-provider` and `x-tollgate-fallbacks`. A route that ends without an answer gives the
+ADR-0008 502: the whole reservation is refunded, except after a `bad_response`, which is charged as
+reserved (ADR-0010). Only the provider calls are guarded, so a limiter error is a 500, never a refund.
+The limit headers come from the `Decision` that `reserve` returned, so a 200 shows the balance after the
+reservation and a 502 the balance before the settle; the next request sees the settled balance.
 
 The Redis token bucket keeps one hash per API key at a prefix plus the SHA-256 digest of the key
 (default prefix `tollgate:bucket:`), so the key itself is never written to Redis. The hash holds

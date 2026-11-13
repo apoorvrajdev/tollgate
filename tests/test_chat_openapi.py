@@ -20,23 +20,27 @@ LIMIT_HEADER_NAMES = {
 }
 
 
-def test_route_documents_exactly_the_200_400_401_429_and_502_responses() -> None:
+ROUTING_HEADER_NAMES = {"x-tollgate-provider", "x-tollgate-fallbacks"}
+
+
+def test_route_documents_exactly_the_200_400_401_404_429_and_502_responses() -> None:
     responses = document()["paths"][ROUTE]["post"]["responses"]
-    assert set(responses) == {"200", "400", "401", "429", "502"}
+    assert set(responses) == {"200", "400", "401", "404", "429", "502"}
     ok = responses["200"]["content"]["application/json"]["schema"]
     assert ok == {"$ref": "#/components/schemas/ChatResponse"}
     assert responses["200"]["description"] == "Successful Response"
-    for status in ("400", "401", "429", "502"):
+    for status in ("400", "401", "404", "429", "502"):
         schema = responses[status]["content"]["application/json"]["schema"]
         assert schema == {"$ref": "#/components/schemas/ErrorResponse"}, status
 
 
 def test_limit_headers_are_documented_on_200_429_and_502_and_retry_after_only_on_429() -> None:
     responses = document()["paths"][ROUTE]["post"]["responses"]
-    assert set(responses["200"]["headers"]) == LIMIT_HEADER_NAMES
+    assert set(responses["200"]["headers"]) == LIMIT_HEADER_NAMES | ROUTING_HEADER_NAMES
     assert set(responses["429"]["headers"]) == LIMIT_HEADER_NAMES | {"Retry-After"}
     assert set(responses["502"]["headers"]) == LIMIT_HEADER_NAMES
     assert "headers" not in responses["400"]
+    assert "headers" not in responses["404"]
     assert set(responses["401"]["headers"]) == {"WWW-Authenticate"}
     types = {name: spec["schema"]["type"] for name, spec in responses["429"]["headers"].items()}
     assert types == {
@@ -45,6 +49,12 @@ def test_limit_headers_are_documented_on_200_429_and_502_and_retry_after_only_on
         "x-ratelimit-reset-tokens": "string",
         "Retry-After": "integer",
     }
+
+
+def test_routing_headers_are_documented_on_200_with_their_types() -> None:
+    headers = document()["paths"][ROUTE]["post"]["responses"]["200"]["headers"]
+    types = {name: headers[name]["schema"]["type"] for name in ROUTING_HEADER_NAMES}
+    assert types == {"x-tollgate-provider": "string", "x-tollgate-fallbacks": "integer"}
 
 
 def test_401_documents_the_www_authenticate_challenge_header() -> None:

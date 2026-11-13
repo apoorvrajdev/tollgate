@@ -285,7 +285,7 @@ def test_provider_failure_returns_502_and_refunds_the_whole_reservation(error: E
     assert header_values(response) == ("1000", "889", "12s", None)
     assert recorder.calls == [("reserve", CALLER_ID, 111), ("settle", CALLER_ID, 111, 0)]
     # Refunded in full: back to 1000, so the follow-up leaves 989.
-    gateway.app.state.provider = MockProvider(gateway.clock, FixedIdSource())
+    gateway.app.state.providers["mock"] = MockProvider(gateway.clock, FixedIdSource())
     assert header_values(gateway.post(PAYLOAD_A)) == ("1000", "989", "2s", None)
 
 
