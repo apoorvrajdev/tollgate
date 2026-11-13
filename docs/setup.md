@@ -81,9 +81,49 @@ invalid. The error names the variable and the reason, never the value. API keys 
 | `TOLLGATE_CAPACITY_TOKENS` | Bucket capacity in tokens, a whole number greater than 0; at most 75,059,993,789 with the `redis` backend | the value of `TOLLGATE_TOKENS_PER_MINUTE` | no |
 | `TOLLGATE_LIMITER_BACKEND` | `memory` or `redis` (lower case, exact) | `memory` | no |
 | `TOLLGATE_REDIS_URL` | Redis connection URL; may contain a password | none | only when the backend is `redis` |
+| `TOLLGATE_ROUTES_FILE` | Path to a JSON route table (below); surrounding spaces are trimmed, and set but blank is an error | the built-in table: one `mock` provider and a default route to it | no |
 
 Numbers are plain ASCII digits, at most 18: `1_000`, `1e3`, `1.5`, signs and spaces inside the number are
 rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
+
+### Route table
+
+The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully
+checked when the settings are read, so a broken file stops the gateway at startup. Requests are not routed by
+it yet; that arrives in T-202, and only the `mock` type is served until the adapter tasks.
+
+```json
+{
+  "providers": {
+    "local": {"type": "ollama", "base_url": "http://localhost:11434", "timeout_seconds": 60},
+    "cloud": {"type": "openai", "api_key_env": "OPENAI_API_KEY"},
+    "claude": {"type": "anthropic", "api_key_env": "ANTHROPIC_API_KEY", "default_max_tokens": 1024},
+    "test": {"type": "mock"}
+  },
+  "routes": {
+    "fast": [{"provider": "local", "model": "llama3.2"}, {"provider": "cloud", "model": "gpt-4o-mini"}]
+  },
+  "default": [{"provider": "test"}]
+}
+```
+
+- `providers` and `routes` are required (either may be empty); `default` is optional. Unknown fields and
+  duplicate keys are rejected at every level, and so are an empty provider name, an empty alias and an empty
+  upstream `model`.
+- `type` is exactly `mock`, `ollama`, `openai` or `anthropic`. `base_url` and `timeout_seconds` (a whole number
+  from 5 to 600, default 60) are allowed for the three HTTP types, not for `mock`. `api_key_env` is required for
+  `openai` and `anthropic` and not allowed for the others. `default_max_tokens` (at least 1) is required for
+  `anthropic` and not allowed for the others.
+- A route, and `default`, has 1 to 5 targets, each a defined `provider` and an optional upstream `model`;
+  without `model`, the client's model is passed through.
+- Keys never go in the file. `api_key_env` is the name of the environment variable that holds the key (letters,
+  digits and underscores, not starting with a digit). The variable must be set and not blank; surrounding
+  spaces are trimmed.
+- The file must be UTF-8 without a byte order mark (some editors, such as Windows Notepad, add one).
+- Errors name `TOLLGATE_ROUTES_FILE` and the field path, for example
+  `TOLLGATE_ROUTES_FILE: routes.fast[0].provider: names an undefined provider`, or the key variable that is
+  missing. They never show a value from the file or the environment, and an unreadable file is reported
+  without its path.
 
 ### Authentication
 

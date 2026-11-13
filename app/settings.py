@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import SecretStr
 
+from app.routing.config import RouteTable, RouteTableError, load_route_table
+
 API_KEYS_VAR = "TOLLGATE_API_KEYS"
 TOKENS_PER_MINUTE_VAR = "TOLLGATE_TOKENS_PER_MINUTE"
 CAPACITY_TOKENS_VAR = "TOLLGATE_CAPACITY_TOKENS"
@@ -38,6 +40,7 @@ class Settings:
     capacity_tokens: int
     limiter_backend: LimiterBackend
     redis_url: SecretStr | None
+    route_table: RouteTable
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -53,12 +56,17 @@ class Settings:
         )
         limiter_backend = _parse_backend(environ.get(LIMITER_BACKEND_VAR))
         redis_url = _parse_redis_url(limiter_backend, environ.get(REDIS_URL_VAR))
+        try:
+            route_table = load_route_table(environ)
+        except RouteTableError as error:
+            raise SettingsError(error.variable, error.reason) from None
         return cls(
             api_keys=api_keys,
             tokens_per_minute=tokens_per_minute,
             capacity_tokens=capacity_tokens,
             limiter_backend=limiter_backend,
             redis_url=redis_url,
+            route_table=route_table,
         )
 
 
