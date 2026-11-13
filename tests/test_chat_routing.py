@@ -312,7 +312,6 @@ def test_without_a_route_file_each_200_names_mock_and_zero_fallbacks(injected: b
 # Criterion 7: a provider type that is not built yet.
 
 UNBUILT: list[tuple[str, dict[str, Any]]] = [
-    ("ollama", {"type": "ollama", "base_url": "http://SENTINEL-host:11434"}),
     ("openai", {"type": "openai", "api_key_env": "SENTINEL_KEY_VAR"}),
     (
         "anthropic",
@@ -337,7 +336,7 @@ def test_route_file_with_an_unbuilt_provider_type_fails_startup_naming_the_varia
     assert raised.value.variable == "TOLLGATE_ROUTES_FILE"
     message = str(raised.value)
     assert message == (
-        "TOLLGATE_ROUTES_FILE: providers.real.type: is not built yet; built types: mock"
+        "TOLLGATE_ROUTES_FILE: providers.real.type: is not built yet; built types: mock, ollama"
     )
     assert "SENTINEL" not in message
 
