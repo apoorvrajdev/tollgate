@@ -24,7 +24,10 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-ra --strict-markers --strict-config"
+addopts = "-ra --strict-markers --strict-config -m 'not redis_server'"
+markers = [
+    "redis_server: needs a real Redis server at TOLLGATE_TEST_REDIS_URL; run in CI or by hand with -m redis_server",
+]
 
 [tool.mypy]
 python_version = "3.13"
