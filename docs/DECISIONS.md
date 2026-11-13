@@ -394,8 +394,8 @@ Proposed · 2026-11-13
     `default_max_tokens`. The `text` blocks, joined in order with no separator, form the reply; other blocks,
     such as thinking, are ignored, and a response with no `text` block gives an empty reply (a refusal, or a
     limit spent on thinking, can have none). end_turn and stop_sequence map to stop, max_tokens and
-    model_context_window_exceeded to length, refusal to content_filter, and anything else is `bad_response`. Prompt tokens are `input_tokens` plus `cache_creation_input_tokens` plus
-    `cache_read_input_tokens`, an absent or null cache field counting 0; completion tokens are
+    model_context_window_exceeded to length, refusal to content_filter, and anything else is `bad_response`.
+    Prompt tokens are `input_tokens` plus `cache_creation_input_tokens` plus `cache_read_input_tokens`, an absent or null cache field counting 0; completion tokens are
     `output_tokens`. `id` comes from the injected id source and `created` from the injected clock.
   - **Settle on `bad_response` (amends ADR-0007 and ADR-0008).** The reservation is charged as made (settle
     with the actual amount equal to the reservation) and the answer is the ADR-0008 502. Every failure before a
@@ -483,8 +483,8 @@ Proposed · 2026-11-13
   - A broken route table stops the app at startup, not at the first request.
   - A request has no total deadline: each of up to 5 targets can take its timeouts, which apply per network
     operation, so a slow route can take much longer than the sum of its `timeout_seconds`. With no health
-    tracking, a dead primary costs at least its connect timeout on every request until the configuration
-    changes.
+    tracking, a primary whose host does not answer costs up to its connect timeout (5 seconds) on every
+    request until the configuration changes; a refused connection fails at once.
   - A 502 does not tell the client which upstream failed or why.
   - The contract gains the 404 and two response headers. `Router` and `Route` become final interfaces in
     ARCHITECTURE section 3.
