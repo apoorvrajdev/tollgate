@@ -105,12 +105,13 @@ deliberate.
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
 body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
-`app/providers/` (the `Provider` protocol and
-`MockProvider`), `app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
+`app/providers/` (the `Provider` protocol, `MockProvider`, and `ProviderError` with its failure kinds in
+`errors.py`), `app/routing/` (`config.py`: the route table file, validated when the settings are read, and the
+built-in table; nothing routes with it yet), `app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
 fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
-behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: `routing/`,
-`cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
+behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: the router
+in `routing/` (T-202), `cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
 without a key never sees a validation error, and the `require_api_key` dependency returns the caller identity
