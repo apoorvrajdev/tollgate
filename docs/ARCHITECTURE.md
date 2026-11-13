@@ -38,7 +38,7 @@ flowchart TB
 | API layer | `/v1/chat/completions`, `/health`, request and response models, error shape | Phase 0-1 |
 | Providers | Adapters behind one interface: mock, then Ollama, then OpenAI and Anthropic | Phase 1-2 |
 | Token counting | Estimate before the call, settle with the provider's reported usage after | Phase 1 |
-| Rate limiter | Per-key token budget per window, state in Redis; the Redis client choice is decided in an ADR | Phase 1 |
+| Rate limiter | Per-key token bucket, state in Redis through redis-py and one Lua script (ADR-0006) | Phase 1 |
 | Router | Rule-based choice of provider and model, with fallback when a provider fails | Phase 2 |
 | Semantic cache | Embedding of the prompt, similarity lookup, thresholds and invalidation | Phase 3 |
 | Operations | Docker Compose, metrics, structured logs, load benchmarks | Phase 4 |
@@ -105,14 +105,27 @@ deliberate.
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
 body and handler, API key authentication, the chat router) and `app/providers/` (the `Provider` protocol and
-`MockProvider`), `app/limits/` (the token estimator, the `RateLimiter` interface and the in-memory token
-bucket; the Redis limiter comes later), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
+`MockProvider`), `app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
+bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
+fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
 behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: `routing/`,
 `cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
 without a key never sees a validation error, and the `require_api_key` dependency returns the caller identity
 and makes the OpenAPI document record the bearer scheme.
+
+The Redis token bucket keeps one hash per API key at a prefix plus the SHA-256 digest of the key
+(default prefix `tollgate:bucket:`), so the key itself is never written to Redis. The hash holds
+`balance_units` (tokens x 60000) and `updated_milliseconds`; in those units one millisecond refills
+exactly `tokens_per_minute` units, so the script works only with integers below 2^53 and agrees with
+the exact in-memory reference. The script takes the time from the injected `Clock`, rounded down to
+whole milliseconds, never from the server, and returns the balance as the fraction string
+`"<n>/60000"`. `capacity_tokens` and `tokens_per_minute` are each at most 75,059,993,789, and a
+charge stops at a debt of that many tokens, which the in-memory limiter does not. Each call sets
+the key to expire once the bucket would be full again plus 60 seconds, because a missing key starts
+full. Calls that reach Redis out of order are handled like a clock that steps back: no refill, and
+the timestamp never moves back.
 
 ## 6. Conventions
 
