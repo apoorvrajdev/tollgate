@@ -94,7 +94,7 @@ number order. The rows below are in delivery order; the cards further down are l
 | T-106 | Redis token bucket, unit-tested against fakeredis | 1 | done | T-105; ADR-0006 accepted 2026-11-12 |
 | T-107 | Real Redis in CI | 1 | done | T-106 |
 | T-108 | Rate limiting on chat completions | 1 | done | T-103, T-104, T-105, T-106 |
-| T-201 | Provider errors and the route table | 2 | todo | Phase 1 gate; ADR-0010 and ADR-0011 accepted |
+| T-201 | Provider errors and the route table | 2 | todo | Phase 1 gate; ADR-0010 and ADR-0011 accepted 2026-11-13 |
 | T-202 | Routing and fallback on chat completions | 2 | todo | T-201 |
 | T-203 | Close the clients the app builds on shutdown | 2 | todo | T-202 |
 | T-204 | Ollama adapter | 2 | todo | T-203 |
