@@ -16,8 +16,8 @@ Accepted decisions change only through a new ADR.
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
-| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007) | Proposed | 2026-11-13 |
-| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures | Proposed | 2026-11-13 |
+| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Proposed | 2026-11-13 |
+| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Proposed | 2026-11-13 |
 
 ---
 
@@ -304,8 +304,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0010
 
-**Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007)** · Proposed ·
-2026-11-13
+**Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008)** ·
+Proposed · 2026-11-13
 
 - **Context:** ADR-0004 adds providers in a fixed order (mock, Ollama, OpenAI, Anthropic) and allows only the
   mock or recorded fakes in tests. ADR-0007 said `tiktoken` would be reconsidered when the first real adapter
@@ -322,7 +322,9 @@ Accepted decisions change only through a new ADR.
     compiled `jiter` (which has the needed wheels) and a second HTTP stack. `anthropic` raises `TypeError` when
     given a plain `httpx` client (`main` branch, not the 2.3.0 tag). Both retry twice by default on connection
     errors, 408, 409, 429 and 5xx, and wait up to 10 minutes by default. `ollama` 0.6.3 (MIT) is a thin httpx
-    wrapper with no retries.
+    wrapper with no retries. The `TypeError` was read on `main`, so it shows where later releases are going, not
+    a property of 2.3.0; the reasons against the SDKs are the extra packages, the second HTTP stack and the
+    built-in retries.
   - Ollama (MIT) native `POST /api/chat` streams unless `"stream": false` is sent, leaves `prompt_eval_count`,
     `eval_count` and `done_reason` out of the JSON when they are empty or 0, reports `done_reason` "stop" or
     "length", and answers errors as `{"error": "<text>"}`, with 404 for a missing model (docs.ollama.com/api and
@@ -336,7 +338,7 @@ Accepted decisions change only through a new ADR.
     required. System text is a top-level `system` field. Messages have no `name`. `content` is a list of blocks,
     including thinking blocks. `stop_reason` is one of end_turn, max_tokens, stop_sequence, tool_use,
     pause_turn, refusal or model_context_window_exceeded. Total input tokens are `input_tokens` plus the two
-    cache fields. 529 means overloaded (platform.claude.com API docs). Anthropic's OpenAI-compatible endpoint
+    cache fields. 529 means overloaded (Anthropic's API documentation). Anthropic's OpenAI-compatible endpoint
     is "not considered a long-term or production-ready solution for most use cases".
   - No provider documents an idempotency key for chat, so a retry after a timeout can be billed twice.
   - `tiktoken` 0.14.0 would add 5 packages, and the licence of its encoding files is still not stated anywhere
@@ -354,7 +356,10 @@ Accepted decisions change only through a new ADR.
     `requirements-dev.txt` to `requirements.txt`, and `httpx` moves to the runtime dependencies in
     `pyproject.toml`. No provider SDK and no `ollama` package.
   - **Clients.** `create_app()` builds one `httpx.AsyncClient` per configured HTTP provider, with its base URL
-    and its timeout (connect 5 seconds). An app lifespan closes every client the app built, and the Redis client
+    and its timeout (`timeout_seconds` for reads, writes and the pool, and 5 seconds to connect, so
+    `timeout_seconds` is at least 5). These timeouts apply to each network operation, not to the request as a
+    whole, so a slow provider can take longer than `timeout_seconds`; a total deadline per request is deferred
+    to the backlog. An app lifespan closes every client the app built, and the Redis client
     it built from the URL, on shutdown. Tests inject an `httpx.MockTransport`, so no test opens a socket.
   - **One attempt.** An adapter makes exactly one HTTP request, with no retry and no sleeping. Falling back is
     the router's job (ADR-0011).
@@ -366,8 +371,9 @@ Accepted decisions change only through a new ADR.
     | `timeout` | the configured timeout passed (`httpx.TimeoutException`) | yes |
     | `rate_limited` | upstream 429 | yes |
     | `upstream_status` | any other non-2xx; retryable only when 500 or above, including 529 | 5xx only |
-    | `bad_response` | a 2xx that cannot be translated: invalid JSON, a missing field, an unknown finish reason, a negative or missing token count | no |
+    | `bad_response` | a 2xx that cannot be translated: a body that cannot be decoded (`httpx.DecodingError`) or is not valid JSON, a missing field, an unknown finish reason, a negative or missing token count | no |
 
+    `httpx.TimeoutException` is a subclass of `httpx.TransportError`, so an adapter checks for a timeout first.
     Messages carry only the kind and the HTTP status. They never carry a response body, which can echo the
     prompt, or a key.
   - **Translation, all providers.** `user` is not forwarded. Fields the gateway does not model (`top_p`, `stop`,
@@ -385,14 +391,15 @@ Accepted decisions change only through a new ADR.
   - **Anthropic.** `anthropic-version: 2026-10-21`. Every system message is joined with `\n`, in order, into
     `system`. `name` and `temperature` are dropped, because that version rejects any temperature. `max_tokens`
     is the client's `max_completion_tokens`, else `max_tokens`, else the provider's configured
-    `default_max_tokens`. Only `text` blocks form the reply. end_turn and stop_sequence map to stop, max_tokens
-    and model_context_window_exceeded to length, refusal to content_filter, and anything else is
-    `bad_response`. Prompt tokens are `input_tokens` plus `cache_creation_input_tokens` plus
+    `default_max_tokens`. The `text` blocks, joined in order with no separator, form the reply; other blocks,
+    such as thinking, are ignored, and a response with no `text` block gives an empty reply (a refusal, or a
+    limit spent on thinking, can have none). end_turn and stop_sequence map to stop, max_tokens and
+    model_context_window_exceeded to length, refusal to content_filter, and anything else is `bad_response`. Prompt tokens are `input_tokens` plus `cache_creation_input_tokens` plus
     `cache_read_input_tokens`, an absent or null cache field counting 0; completion tokens are
     `output_tokens`. `id` comes from the injected id source and `created` from the injected clock.
-  - **Settle on `bad_response` (amends ADR-0007).** The reservation is charged as made (settle with the actual
-    amount equal to the reservation) and the answer is 502. Every failure before a 2xx keeps ADR-0007's full
-    refund.
+  - **Settle on `bad_response` (amends ADR-0007 and ADR-0008).** The reservation is charged as made (settle
+    with the actual amount equal to the reservation) and the answer is the ADR-0008 502. Every failure before a
+    2xx keeps the full refund that ADR-0007 and ADR-0008 describe.
   - **Estimator.** `tiktoken` stays out, for the reasons in ADR-0007, which have not changed. The heuristic
     estimate is used for every provider, and settling with the reported usage corrects it.
   - **Fakes.** Adapter tests use response bodies written from the documented shapes cited above. When the owner
@@ -403,11 +410,15 @@ Accepted decisions change only through a new ADR.
   - Anthropic ignores the client's temperature, a visible difference from the other providers. A reservation
     for an Anthropic route with no max field understates the cost until settle.
   - Starlette's TestClient keeps warning that it prefers `httpx2`. Switching is a separate decision.
-  - ADR-0007's status becomes "Accepted - amended by ADR-0010" when this ADR is accepted.
+  - A provider that is not an HTTP adapter (the mock, or one injected in tests) is not checked by these rules,
+    so a negative count from it still makes `settle` raise.
+  - When this ADR is accepted, ADR-0007's status becomes "Accepted - amended by ADR-0010", and ADR-0008's gains
+    ADR-0010 (its 502 no longer always refunds).
 
 ## ADR-0011
 
-**Routing: a route table file, ordered fallback on retryable failures** · Proposed · 2026-11-13
+**Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008)** · Proposed ·
+2026-11-13
 
 - **Context:** The router picks a provider and model for each request (ARCHITECTURE section 2). Prior art,
   checked on 2026-11-13 in each project's documentation and source:
@@ -434,19 +445,29 @@ Accepted decisions change only through a new ADR.
   - Health: (h) none; (i) a per-process cooldown after repeated failures.
   - Unknown model: (j) 404 before any reservation; (k) 400; (l) always a default route.
 - **Decision (proposed):** (a), (e), (f), (h), and (j) with an optional default route.
-  - **Route table file.** `TOLLGATE_ROUTES_FILE` names a JSON file with `providers` (name → `type` of `mock`,
-    `ollama`, `openai` or `anthropic`, optional `base_url`, `api_key_env`, `timeout_seconds`, and
-    `default_max_tokens` for `anthropic` only), `routes` (alias → 1 to 5 targets, each a `provider` and an
-    optional upstream `model`; without one the client's model is passed through) and an optional `default`
-    route. Unknown fields are rejected. A key is never in the file: `api_key_env` names the environment variable
-    that holds it, read at startup. Every error names the variable and the field path, never a value. Without
-    the variable a built-in table applies: one `mock` provider and a default route to it, so behaviour stays as
-    it is today.
+  - **Route table file.** `TOLLGATE_ROUTES_FILE` names a JSON file with three keys:
+    - `providers`: provider name → `type` (`mock`, `ollama`, `openai` or `anthropic`) and its settings.
+      `base_url` and `timeout_seconds` (at least 5, at most 600, default 60) are allowed for the three HTTP types
+      and rejected for `mock`. `api_key_env` is required for `openai` and `anthropic` and rejected for `mock` and
+      `ollama`. `default_max_tokens` is required for `anthropic` and rejected for every other type.
+    - `routes`: alias → 1 to 5 targets, each a `provider` and an optional upstream `model`; without one the
+      client's model is passed through.
+    - `default`: an optional list of targets, with the same rules as a route.
+
+    Unknown fields and duplicate keys at any level are rejected (Python's `json` would otherwise keep the last
+    duplicate silently). A key is never in the file: `api_key_env` names the environment variable that holds
+    it, read at startup, and a variable that is unset, empty or only whitespace is an error naming it. Every
+    error names the variable and the field path, never a value. The table is read where the other settings
+    are, from the same environment mapping, so tests never touch the process environment. Without the variable
+    a built-in table applies: one provider named `mock` of type `mock`, and a default route to it with no
+    upstream model, so behaviour stays as it is today.
   - **Selection.** `Router.select(request) -> Route` matches `request.model` exactly against the aliases, then
     uses the default route, and otherwise refuses with 404 (`type: invalid_request_error`,
-    `code: model_not_found`, `param: model`) before any estimate or reservation. A 404 carries no limit headers.
-    The official SDK maps 404 to `NotFoundError`; whether OpenAI itself sends `model_not_found` in this case was
-    not checked.
+    `code: model_not_found`, `param: model`, message "The requested model is not available on this gateway.",
+    which does not echo the model, as ADR-0009 never echoes a rejected value) before any estimate or
+    reservation. A 404 carries no limit headers (amends ADR-0008, under which every authenticated chat response
+    carried them). The official SDK maps 404 to `NotFoundError`; whether OpenAI itself sends `model_not_found`
+    in this case was not checked.
   - **Fallback.** The route's targets are tried in order, each at most once. The request goes to each target
     with its upstream model. Only a retryable `ProviderError` (ADR-0010) moves on to the next target. Any other
     error stops the route at once, and a route that runs out of targets ends in 502 (ADR-0008).
@@ -460,11 +481,15 @@ Accepted decisions change only through a new ADR.
     cost-based routing, and fallback chains for context-length or content-policy errors.
 - **Consequences:**
   - A broken route table stops the app at startup, not at the first request.
-  - The worst-case latency of a request is the sum of the timeouts of its targets (at most 5). With no health
-    tracking, a dead primary costs its timeout on every request until the configuration changes.
+  - A request has no total deadline: each of up to 5 targets can take its timeouts, which apply per network
+    operation, so a slow route can take much longer than the sum of its `timeout_seconds`. With no health
+    tracking, a dead primary costs at least its connect timeout on every request until the configuration
+    changes.
   - A 502 does not tell the client which upstream failed or why.
   - The contract gains the 404 and two response headers. `Router` and `Route` become final interfaces in
     ARCHITECTURE section 3.
+  - When this ADR is accepted, ADR-0008's status becomes "Accepted - amended by ADR-0009, ADR-0010 and
+    ADR-0011".
 
 ---
 
