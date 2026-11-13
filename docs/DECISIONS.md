@@ -14,8 +14,8 @@ Accepted decisions change only through a new ADR.
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
 | [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted | 2026-11-12 |
-| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted | 2026-11-12 |
-| [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Proposed | 2026-11-13 |
+| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009 | 2026-11-12 |
+| [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
 
 ---
 
@@ -206,7 +206,7 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0008
 
-**HTTP contract for authentication, limit headers and errors** · Accepted · 2026-11-12
+**HTTP contract for authentication, limit headers and errors** · Accepted - amended by ADR-0009 · 2026-11-12
 
 - **Context:** ADR-0004 makes the API OpenAI-compatible, and the official OpenAI Python SDK is the reference
   client. Checked on 2026-11-12:
@@ -254,7 +254,7 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0009
 
-**Validation error codes and `param` format (extends ADR-0008)** · Proposed · 2026-11-13
+**Validation error codes and `param` format (extends ADR-0008)** · Accepted · 2026-11-13
 
 - **Context:** ADR-0008 fixes the 400 body's `type` (`invalid_request_error`), says `param` names the field
   "when known", and fixes `code: "unsupported_parameter"` with `param: "stream"` for streaming. It does not
