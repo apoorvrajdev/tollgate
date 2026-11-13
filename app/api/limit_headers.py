@@ -52,7 +52,9 @@ LIMIT_HEADERS_OPENAPI: dict[str, dict[str, Any]] = {
         "schema": {"type": "integer"},
     },
     REMAINING_TOKENS_HEADER: {
-        "description": "Tokens left after this request's reservation, rounded down, never below 0",
+        "description": (
+            "The balance after the limiter's decision on this request, rounded down, never below 0"
+        ),
         "schema": {"type": "integer"},
     },
     RESET_TOKENS_HEADER: {
