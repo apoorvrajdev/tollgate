@@ -231,6 +231,18 @@ def test_each_http_provider_gets_its_own_client_with_its_timeouts_and_base_url(
     ]
 
 
+def test_an_empty_base_url_is_treated_as_not_given_and_uses_the_default_host(
+    tmp_path: Path,
+) -> None:
+    upstream = answering()
+    table = providers_table(local={"type": "ollama", "base_url": ""})
+    with TestClient(make_app(tmp_path, upstream, table)) as client:
+        assert post(client, "solo").status_code == 200
+    assert [str(request.url) for request in upstream.requests] == [
+        "http://localhost:11434/api/chat"
+    ]
+
+
 class CountingTransport(httpx.MockTransport):
     """A MockTransport that counts how often it is closed."""
 

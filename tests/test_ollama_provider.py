@@ -41,10 +41,20 @@ OK_SURROGATE_CONTENT = (
 )
 
 
+# json.dumps escapes the lone surrogate as ASCII text, which the adapter's JSON parser decodes.
+OK_SURROGATE_MODEL = json.dumps({**OK_BODY, "model": "m" + chr(0xD800)}).encode("ascii")
+
+
 def ok_body(**overrides: Any) -> dict[str, Any]:
     """OK_BODY with fields replaced; a value of `...` removes the field."""
     body = {**OK_BODY, **overrides}
     return {key: value for key, value in body.items() if value is not ...}
+
+
+def raw_with_count(literal: str) -> bytes:
+    """A valid reply whose eval_count is the given JSON literal (Python accepts NaN, Infinity)."""
+    template = json.dumps(ok_body(eval_count=0))
+    return template.replace('"eval_count": 0', '"eval_count": ' + literal).encode("utf-8")
 
 
 def json_handler(body: Any, status: int = 200) -> Handler:
@@ -266,6 +276,12 @@ def test_a_missing_role_is_not_checked_and_the_output_role_is_assistant() -> Non
     assert response_for(json_handler(body)).choices[0].message.role == "assistant"
 
 
+@pytest.mark.parametrize("role", ["user", "system", "tool", "ASSISTANT", ""])
+def test_the_output_role_is_assistant_whatever_role_the_reply_names(role: str) -> None:
+    body = ok_body(message={"role": role, "content": "x"})
+    assert response_for(json_handler(body)).choices[0].message.role == "assistant"
+
+
 # Criterion 3: errors.
 
 BAD_RESPONSES: list[tuple[str, Handler]] = [
@@ -292,6 +308,10 @@ BAD_RESPONSES: list[tuple[str, Handler]] = [
     ("content-list", json_handler(ok_body(message={"content": ["x"]}))),
     ("content-dict", json_handler(ok_body(message={"content": {"a": 1}}))),
     ("content-lone-surrogate", lambda r: httpx.Response(200, content=OK_SURROGATE_CONTENT)),
+    ("model-lone-surrogate", lambda r: httpx.Response(200, content=OK_SURROGATE_MODEL)),
+    ("count-nan", lambda r: httpx.Response(200, content=raw_with_count("NaN"))),
+    ("count-infinity", lambda r: httpx.Response(200, content=raw_with_count("Infinity"))),
+    ("count-negative-infinity", lambda r: httpx.Response(200, content=raw_with_count("-Infinity"))),
     ("no-done-reason", json_handler(ok_body(done_reason=...))),
     ("done-reason-null", json_handler(ok_body(done_reason=None))),
     ("done-reason-empty", json_handler(ok_body(done_reason=""))),
@@ -356,6 +376,21 @@ def test_any_2xx_with_a_valid_body_succeeds(status: int) -> None:
 def test_a_redirect_is_a_non_retryable_upstream_status(status: int) -> None:
     error = error_for(json_handler(OK_BODY, status))
     assert (error.kind, error.status_code, error.retryable) == ("upstream_status", status, False)
+
+
+def test_a_redirect_with_a_location_is_not_followed() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://elsewhere.test/api/chat"})
+
+    result, calls = run(handler)
+    assert isinstance(result, ProviderError)
+    assert (result.kind, result.status_code, result.retryable) == ("upstream_status", 302, False)
+    assert len(calls.requests) == 1
+
+
+def test_an_informational_status_is_an_upstream_status_not_a_success() -> None:
+    error = error_for(lambda request: httpx.Response(100, json=OK_BODY))
+    assert (error.kind, error.status_code, error.retryable) == ("upstream_status", 100, False)
 
 
 def test_a_404_for_a_missing_model_is_a_non_retryable_upstream_status() -> None:
@@ -474,7 +509,9 @@ def test_no_error_shows_the_response_body_or_the_url(handler: Handler) -> None:
 
 
 def test_the_adapter_does_not_import_the_mock() -> None:
-    source = Path("app/providers/ollama.py").read_text(encoding="utf-8")
+    source = (Path(__file__).parent.parent / "app" / "providers" / "ollama.py").read_text(
+        encoding="utf-8"
+    )
     imported: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.ImportFrom) and node.module:
