@@ -12,7 +12,7 @@ from app.clock import SystemClock
 from app.limits.estimate import HeuristicEstimator
 from app.limits.memory import InMemoryRateLimiter
 from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
-from app.main import create_app
+from app.main import _close_all, create_app
 from app.settings import SettingsError
 from tests.fakes import FakeClient, FakeClock, make_settings
 
@@ -193,7 +193,13 @@ def test_injected_redis_client_is_not_registered_or_closed() -> None:
 
 
 @pytest.mark.parametrize("injected", [False, True], ids=["no-client", "injected-client"])
-def test_memory_backend_builds_nothing_and_closes_nothing(injected: bool) -> None:
+def test_memory_backend_builds_nothing_and_closes_nothing(
+    injected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("the memory backend built a Redis client")
+
+    monkeypatch.setattr(Redis, "from_url", refuse)
     client = SpyRedis() if injected else None
     application = create_app(make_settings(), FakeClock(), redis_client=client)
     assert application.state.owned_clients == []
@@ -256,3 +262,18 @@ def test_every_failing_close_is_reported() -> None:
         pass
     assert log == ["second", "first"]
     assert leaves(raised.value) == [second_error, first_error]
+
+
+def test_a_close_that_raises_a_base_exception_propagates_unchanged() -> None:
+    # KeyboardInterrupt and CancelledError must never be collected into the ExceptionGroup.
+    log: list[str] = []
+    interrupt = KeyboardInterrupt()
+    clients = [FakeClient("ok", log=log), FakeClient("stop", log=log, error=interrupt)]
+
+    async def close() -> None:
+        await _close_all(clients)
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        asyncio.run(close())
+    assert raised.value is interrupt
+    assert log == ["stop"]
