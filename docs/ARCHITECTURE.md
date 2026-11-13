@@ -45,7 +45,9 @@ flowchart TB
 
 ## 3. Core interfaces (target, Phase 1 onwards)
 
-Illustrative signatures; names are final only once an ADR or task card fixes them.
+Names are final once an ADR or task card fixes them. `Clock`, `Provider`, `TokenEstimator`,
+`reserved_tokens`, `Decision` and `RateLimiter` are final (tasks T-101 to T-105); `Router` and
+`SemanticCache` are still illustrative.
 
 ```python
 class Clock(Protocol):
@@ -53,6 +55,20 @@ class Clock(Protocol):
 
 class Provider(Protocol):
     async def complete(self, request: ChatRequest) -> ChatResponse: ...
+
+class TokenEstimator(Protocol):
+    def estimate_input_tokens(self, request: ChatRequest) -> int: ...
+
+def reserved_tokens(request: ChatRequest, estimator: TokenEstimator) -> int: ...
+# the estimate plus max_completion_tokens, else max_tokens, else 0; this is what reserve() receives
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    allowed: bool
+    limit_tokens: int                          # the bucket capacity
+    remaining_tokens: int                      # after the decision, rounded down, never below 0
+    retry_after_seconds: int | None            # rounded up; None if allowed or larger than the capacity
+    reset_seconds: int                         # until the bucket is full again, rounded up
 
 class RateLimiter(Protocol):
     async def reserve(self, key: str, estimated_tokens: int) -> Decision: ...
@@ -89,8 +105,10 @@ deliberate.
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
 body and handler, API key authentication, the chat router) and `app/providers/` (the `Provider` protocol and
-`MockProvider`), `app/limits/` (the token estimator; the limiters come later), plus `clock.py`, `settings.py`
-and `main.py`. Planned: `routing/`, `cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
+`MockProvider`), `app/limits/` (the token estimator, the `RateLimiter` interface and the in-memory token
+bucket; the Redis limiter comes later), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
+behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: `routing/`,
+`cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
 without a key never sees a validation error, and the `require_api_key` dependency returns the caller identity
