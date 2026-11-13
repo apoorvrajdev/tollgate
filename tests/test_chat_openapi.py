@@ -13,15 +13,38 @@ def document() -> dict[str, Any]:
     return create_app(make_settings(), FakeClock()).openapi()
 
 
-def test_route_documents_exactly_the_200_400_and_401_responses() -> None:
+LIMIT_HEADER_NAMES = {
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-reset-tokens",
+}
+
+
+def test_route_documents_exactly_the_200_400_401_429_and_502_responses() -> None:
     responses = document()["paths"][ROUTE]["post"]["responses"]
-    assert set(responses) == {"200", "400", "401"}
+    assert set(responses) == {"200", "400", "401", "429", "502"}
     ok = responses["200"]["content"]["application/json"]["schema"]
-    bad = responses["400"]["content"]["application/json"]["schema"]
-    unauthorized = responses["401"]["content"]["application/json"]["schema"]
     assert ok == {"$ref": "#/components/schemas/ChatResponse"}
-    assert bad == {"$ref": "#/components/schemas/ErrorResponse"}
-    assert unauthorized == {"$ref": "#/components/schemas/ErrorResponse"}
+    assert responses["200"]["description"] == "Successful Response"
+    for status in ("400", "401", "429", "502"):
+        schema = responses[status]["content"]["application/json"]["schema"]
+        assert schema == {"$ref": "#/components/schemas/ErrorResponse"}, status
+
+
+def test_limit_headers_are_documented_on_200_429_and_502_and_retry_after_only_on_429() -> None:
+    responses = document()["paths"][ROUTE]["post"]["responses"]
+    assert set(responses["200"]["headers"]) == LIMIT_HEADER_NAMES
+    assert set(responses["429"]["headers"]) == LIMIT_HEADER_NAMES | {"Retry-After"}
+    assert set(responses["502"]["headers"]) == LIMIT_HEADER_NAMES
+    assert "headers" not in responses["400"]
+    assert set(responses["401"]["headers"]) == {"WWW-Authenticate"}
+    types = {name: spec["schema"]["type"] for name, spec in responses["429"]["headers"].items()}
+    assert types == {
+        "x-ratelimit-limit-tokens": "integer",
+        "x-ratelimit-remaining-tokens": "integer",
+        "x-ratelimit-reset-tokens": "string",
+        "Retry-After": "integer",
+    }
 
 
 def test_401_documents_the_www_authenticate_challenge_header() -> None:

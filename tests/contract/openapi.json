@@ -362,7 +362,27 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "x-ratelimit-limit-tokens": {
+                "description": "The bucket capacity in tokens",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining-tokens": {
+                "description": "The balance after the limiter's decision on this request, rounded down, never below 0",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset-tokens": {
+                "description": "Time until the bucket is full again, rounded up to whole seconds: '<s>s' below a minute, '<m>m<s>s' otherwise (0s, 45s, 6m0s)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -386,6 +406,72 @@
             "headers": {
               "WWW-Authenticate": {
                 "description": "The authentication challenge: Bearer",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token rate limit exceeded, or the request is larger than the limit",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds, rounded up, until the same request can succeed. Absent when the request is larger than the limit",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit-tokens": {
+                "description": "The bucket capacity in tokens",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining-tokens": {
+                "description": "The balance after the limiter's decision on this request, rounded down, never below 0",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset-tokens": {
+                "description": "Time until the bucket is full again, rounded up to whole seconds: '<s>s' below a minute, '<m>m<s>s' otherwise (0s, 45s, 6m0s)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The provider failed; the reservation was refunded",
+            "headers": {
+              "x-ratelimit-limit-tokens": {
+                "description": "The bucket capacity in tokens",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining-tokens": {
+                "description": "The balance after the limiter's decision on this request, rounded down, never below 0",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset-tokens": {
+                "description": "Time until the bucket is full again, rounded up to whole seconds: '<s>s' below a minute, '<m>m<s>s' otherwise (0s, 45s, 6m0s)",
                 "schema": {
                   "type": "string"
                 }

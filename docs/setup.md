@@ -77,8 +77,8 @@ invalid. The error names the variable and the reason, never the value. API keys 
 | Variable | Meaning | Default | Required |
 | --- | --- | --- | --- |
 | `TOLLGATE_API_KEYS` | Comma-separated API keys that clients may present; surrounding spaces are trimmed, empty keys are rejected | none | yes |
-| `TOLLGATE_TOKENS_PER_MINUTE` | Refill rate of each key's token bucket, as a whole number greater than 0 | none | yes |
-| `TOLLGATE_CAPACITY_TOKENS` | Bucket capacity in tokens, a whole number greater than 0 | the value of `TOLLGATE_TOKENS_PER_MINUTE` | no |
+| `TOLLGATE_TOKENS_PER_MINUTE` | Refill rate of each key's token bucket, as a whole number greater than 0; at most 75,059,993,789 with the `redis` backend | none | yes |
+| `TOLLGATE_CAPACITY_TOKENS` | Bucket capacity in tokens, a whole number greater than 0; at most 75,059,993,789 with the `redis` backend | the value of `TOLLGATE_TOKENS_PER_MINUTE` | no |
 | `TOLLGATE_LIMITER_BACKEND` | `memory` or `redis` (lower case, exact) | `memory` | no |
 | `TOLLGATE_REDIS_URL` | Redis connection URL; may contain a password | none | only when the backend is `redis` |
 
@@ -104,6 +104,18 @@ the question.
 
 `GET /health` needs no key. `/openapi.json` and `/docs` also need no key, which is a known gap: they describe
 the API but not any key or user data.
+
+### Rate limits
+
+Each API key has a token bucket of `TOLLGATE_CAPACITY_TOKENS`, refilled at `TOLLGATE_TOKENS_PER_MINUTE`. A chat
+completion reserves an estimate of its prompt plus `max_completion_tokens` (or `max_tokens`) before the
+provider is called, and the provider's reported usage is charged or refunded afterwards. Responses that reach
+the limiter (200, 429 and 502) carry `x-ratelimit-limit-tokens`, `x-ratelimit-remaining-tokens` and
+`x-ratelimit-reset-tokens` (written `45s` or `6m0s`; an hour or more is written in minutes, such as `60m0s`).
+Those headers show the balance right after the reservation, so the balance after settling shows on the next
+request. A 429 carries `Retry-After` in whole seconds, except for a request larger than the capacity, which
+can never succeed. A 401 or 400 carries no limit headers. If the provider fails, the reservation is refunded
+and the answer is 502.
 
 Start the server through the app factory, with the variables set in your shell:
 
