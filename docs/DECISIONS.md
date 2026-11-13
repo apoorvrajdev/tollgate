@@ -13,9 +13,11 @@ Accepted decisions change only through a new ADR.
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
 | [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
-| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted | 2026-11-12 |
-| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009 | 2026-11-12 |
+| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 | 2026-11-12 |
+| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
+| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted | 2026-11-13 |
+| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
 
 ---
 
@@ -166,7 +168,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0007
 
-**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted · 2026-11-12
+**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted - amended by ADR-0010 ·
+2026-11-12
 
 - **Context:** The limit is in tokens per API key, but the true cost of a request is known only after the
   provider answers. OpenAI says it counts the maximum of `max_tokens` and an estimate "based on the character
@@ -206,7 +209,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0008
 
-**HTTP contract for authentication, limit headers and errors** · Accepted - amended by ADR-0009 · 2026-11-12
+**HTTP contract for authentication, limit headers and errors** · Accepted - amended by ADR-0009, ADR-0010 and
+ADR-0011 · 2026-11-12
 
 - **Context:** ADR-0004 makes the API OpenAI-compatible, and the official OpenAI Python SDK is the reference
   client. Checked on 2026-11-12:
@@ -299,6 +303,195 @@ Accepted decisions change only through a new ADR.
   - Silently ignored parameters can surprise a client that expects `stop` to work. Rejecting them is a
     separate decision for when the first real provider adapter arrives.
   - ADR-0008's status is "Accepted - amended by ADR-0009".
+
+## ADR-0010
+
+**Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008)** ·
+Accepted · 2026-11-13
+
+- **Context:** ADR-0004 adds providers in a fixed order (mock, Ollama, OpenAI, Anthropic) and allows only the
+  mock or recorded fakes in tests. ADR-0007 said `tiktoken` would be reconsidered when the first real adapter
+  arrives, and ADR-0009 left open whether unmodelled request fields stay ignored. ADR-0003 allows only packages
+  with `cp313` wheels for `win_amd64` and Linux. Checked on 2026-11-13 against the PyPI JSON API, provider
+  documentation and provider source code:
+  - `httpx` 0.28.1 (2024-12-06, BSD-3-Clause, `py3-none-any`) is the latest stable release; 1.0 exists only as
+    `dev` pre-releases. It is already pinned as a dev dependency with `httpcore` 1.0.9 (BSD-3-Clause) and
+    `certifi` 2026.10.23 (MPL-2.0); its other dependencies (`anyio`, `idna`, `h11`) are already runtime pins, so
+    making it a runtime dependency adds no package. `httpx.MockTransport` is public in 0.28.1 and accepts an
+    async handler (encode/httpx, tag 0.28.1).
+  - The official SDKs, `openai` 3.41.0 and `anthropic` 2.3.0 (the newest releases at least two weeks old, both
+    Apache-2.0), are built on `httpx2`, Pydantic's fork of httpx. Together they add 8 packages, among them the
+    compiled `jiter` (which has the needed wheels) and a second HTTP stack. `anthropic` raises `TypeError` when
+    given a plain `httpx` client (`main` branch, not the 2.3.0 tag). Both retry twice by default on connection
+    errors, 408, 409, 429 and 5xx, and wait up to 10 minutes by default. `ollama` 0.6.3 (MIT) is a thin httpx
+    wrapper with no retries. The `TypeError` was read on `main`, so it shows where later releases are going, not
+    a property of 2.3.0; the reasons against the SDKs are the extra packages, the second HTTP stack and the
+    built-in retries.
+  - Ollama (MIT) native `POST /api/chat` streams unless `"stream": false` is sent, leaves `prompt_eval_count`,
+    `eval_count` and `done_reason` out of the JSON when they are empty or 0, reports `done_reason` "stop" or
+    "length", and answers errors as `{"error": "<text>"}`, with 404 for a missing model (docs.ollama.com/api and
+    ollama/ollama `main`). Its OpenAI-compatible `/v1` layer has no `max_completion_tokens` field and drops
+    unknown fields silently.
+  - OpenAI chat completions: `max_tokens` is deprecated and "not compatible with o-series models", so
+    `max_completion_tokens` is the field to send; `message.content` and `usage` can be null or absent; and
+    `finish_reason` can also be `tool_calls` or `function_call` (developers.openai.com API reference).
+  - Anthropic Messages API: `x-api-key` and `anthropic-version` headers. The newest version, `2026-10-21`,
+    answers 400 to any `temperature`, `top_p` or `top_k`, even at the default (migration guide). `max_tokens` is
+    required. System text is a top-level `system` field. Messages have no `name`. `content` is a list of blocks,
+    including thinking blocks. `stop_reason` is one of end_turn, max_tokens, stop_sequence, tool_use,
+    pause_turn, refusal or model_context_window_exceeded. Total input tokens are `input_tokens` plus the two
+    cache fields. 529 means overloaded (Anthropic's API documentation). Anthropic's OpenAI-compatible endpoint
+    is "not considered a long-term or production-ready solution for most use cases".
+  - No provider documents an idempotency key for chat, so a retry after a timeout can be billed twice.
+  - `tiktoken` 0.14.0 would add 5 packages, and the licence of its encoding files is still not stated anywhere
+    official. Anthropic's `count_tokens` endpoint is free but needs a key and the network, and returns an
+    estimate.
+- **Options:**
+  - HTTP client: (a) plain `httpx` adapters; (b) the official SDKs with `max_retries=0`; (c) the `ollama`
+    package for Ollama and (a) for the others.
+  - Ollama endpoint: (d) native `/api/chat`; (e) the OpenAI-compatible `/v1/chat/completions`.
+  - Anthropic endpoint: (f) the Messages API; (g) its OpenAI-compatible endpoint.
+  - A 2xx answer that cannot be translated: (h) refund the whole reservation, like any failure (ADR-0007 as
+    written); (i) charge the reservation as made, because the provider has probably billed for it.
+- **Decision (proposed):** (a), (d), (f) and (i). The token estimate stays heuristic.
+  - **Dependencies.** `httpx==0.28.1`, `httpcore==1.0.9` and `certifi==2026.10.23` move from
+    `requirements-dev.txt` to `requirements.txt`, and `httpx` moves to the runtime dependencies in
+    `pyproject.toml`. No provider SDK and no `ollama` package.
+  - **Clients.** `create_app()` builds one `httpx.AsyncClient` per configured HTTP provider, with its base URL
+    and its timeout (`timeout_seconds` for reads, writes and the pool, and 5 seconds to connect, so
+    `timeout_seconds` is at least 5). These timeouts apply to each network operation, not to the request as a
+    whole, so a slow provider can take longer than `timeout_seconds`; a total deadline per request is deferred
+    to the backlog. An app lifespan closes every client the app built, and the Redis client
+    it built from the URL, on shutdown. Tests inject an `httpx.MockTransport`, so no test opens a socket.
+  - **One attempt.** An adapter makes exactly one HTTP request, with no retry and no sleeping. Falling back is
+    the router's job (ADR-0011).
+  - **Failure taxonomy.** Every adapter failure raises `ProviderError` with a `kind`:
+
+    | Kind | Cause | Retryable |
+    | --- | --- | --- |
+    | `connection` | could not connect, or the connection broke (`httpx.TransportError`) | yes |
+    | `timeout` | the configured timeout passed (`httpx.TimeoutException`) | yes |
+    | `rate_limited` | upstream 429 | yes |
+    | `upstream_status` | any other non-2xx; retryable only when 500 or above, including 529 | 5xx only |
+    | `bad_response` | a 2xx that cannot be translated: a body that cannot be decoded (`httpx.DecodingError`) or is not valid JSON, a missing field, an unknown finish reason, a negative or missing token count | no |
+
+    `httpx.TimeoutException` is a subclass of `httpx.TransportError`, so an adapter checks for a timeout first.
+    Messages carry only the kind and the HTTP status. They never carry a response body, which can echo the
+    prompt, or a key.
+  - **Translation, all providers.** `user` is not forwarded. Fields the gateway does not model (`top_p`, `stop`,
+    `tools` and others) stay ignored and are not forwarded (ADR-0009); rejecting them stays deferred. The reply
+    must be a string. Token counts must be integers of at least 0, and `total_tokens` is computed by the gateway
+    as prompt plus completion. A finish reason outside stop, length and content_filter is `bad_response`.
+  - **Ollama.** Native `/api/chat` with `"stream": false`. The client's `max_completion_tokens`, else
+    `max_tokens`, becomes `options.num_predict`, and `temperature` becomes `options.temperature`, each only when
+    given. `name` is dropped. An absent count is 0. `done_reason` must be "stop" or "length". The response `id`
+    comes from the injected id source and `created` from the injected clock.
+  - **OpenAI.** The client's `max_completion_tokens`, else `max_tokens`, is sent as `max_completion_tokens`;
+    `max_tokens` is never sent. `temperature` and `name` are forwarded. `content: null` with a `refusal` becomes
+    an empty reply with finish reason `content_filter`. Any other null content, a missing `usage`, or a
+    `tool_calls` or `function_call` finish is `bad_response`. The upstream `id` and `created` are kept.
+  - **Anthropic.** `anthropic-version: 2026-10-21`. Every system message is joined with `\n`, in order, into
+    `system`. `name` and `temperature` are dropped, because that version rejects any temperature. `max_tokens`
+    is the client's `max_completion_tokens`, else `max_tokens`, else the provider's configured
+    `default_max_tokens`. The `text` blocks, joined in order with no separator, form the reply; other blocks,
+    such as thinking, are ignored, and a response with no `text` block gives an empty reply (a refusal, or a
+    limit spent on thinking, can have none). end_turn and stop_sequence map to stop, max_tokens and
+    model_context_window_exceeded to length, refusal to content_filter, and anything else is `bad_response`.
+    Prompt tokens are `input_tokens` plus `cache_creation_input_tokens` plus `cache_read_input_tokens`, an absent or null cache field counting 0; completion tokens are
+    `output_tokens`. `id` comes from the injected id source and `created` from the injected clock.
+  - **Settle on `bad_response` (amends ADR-0007 and ADR-0008).** The reservation is charged as made (settle
+    with the actual amount equal to the reservation) and the answer is the ADR-0008 502. Every failure before a
+    2xx keeps the full refund that ADR-0007 and ADR-0008 describe.
+  - **Estimator.** `tiktoken` stays out, for the reasons in ADR-0007, which have not changed. The heuristic
+    estimate is used for every provider, and settling with the reported usage corrects it.
+  - **Fakes.** Adapter tests use response bodies written from the documented shapes cited above. When the owner
+    calls a provider by hand, a sanitised real body may replace a hand-written one.
+- **Consequences:**
+  - No new package and one HTTP stack. The adapters are hand-written, so translation bugs are the main risk
+    (ADR-0004), and each adapter's tests cover every rule above.
+  - Anthropic ignores the client's temperature, a visible difference from the other providers. A reservation
+    for an Anthropic route with no max field understates the cost until settle.
+  - Starlette's TestClient keeps warning that it prefers `httpx2`. Switching is a separate decision.
+  - A provider that is not an HTTP adapter (the mock, or one injected in tests) is not checked by these rules,
+    so a negative count from it still makes `settle` raise.
+  - ADR-0007's status is "Accepted - amended by ADR-0010", and ADR-0008's names ADR-0010 among the ADRs that
+    amend it (its 502 no longer always refunds). Accepted by the owner as written on 2026-11-13.
+
+## ADR-0011
+
+**Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008)** · Accepted ·
+2026-11-13
+
+- **Context:** The router picks a provider and model for each request (ARCHITECTURE section 2). Prior art,
+  checked on 2026-11-13 in each project's documentation and source:
+  - Every gateway maps a client-facing model name to upstream targets: LiteLLM model groups (`model_name`),
+    Portkey `targets`, OpenRouter's `models` array, Kong `model_alias`, Envoy AI Gateway `backendRefs` with
+    `priority`.
+  - Fallback triggers differ. OpenRouter and Portkey fall back on any error by default. Kong's default is
+    connection errors and timeouts only ("Client errors don't trigger failover"; 429 and 502 are opt-in), and
+    LiteLLM does not cool down a deployment for most 4xx errors. LiteLLM and Portkey also retry the same target
+    with backoff first (LiteLLM `num_retries` 2, Portkey up to 5 attempts at 1 to 16 seconds).
+  - Cooldowns and circuit breakers exist (LiteLLM 5 seconds by default; Portkey's minimum is 30 seconds; Kong's
+    is off by default), and their state is often shared through Redis.
+  - On usage, OpenRouter: "An attempt that errors is not charged for its model tokens, so with fallback you pay
+    only for the run that answers." Its response `model` is the model that served the request. LiteLLM reports
+    the serving deployment and the attempted fallbacks in `x-litellm-*` headers.
+  - Load balancing and latency-, cost- or usage-based routing are common, but LiteLLM calls usage-based routing
+    "not recommended for production".
+  - YAML configuration would need a new dependency; `json` is in the standard library.
+- **Options:**
+  - Configuration: (a) a JSON file whose path is an environment variable, validated with pydantic at startup;
+    (b) environment variables only; (c) YAML.
+  - Fallback trigger: (d) any error; (e) connection errors, timeouts, upstream 429 and upstream 5xx only.
+  - Retries: (f) none in this phase, each target tried once; (g) same-target retries with backoff first.
+  - Health: (h) none; (i) a per-process cooldown after repeated failures.
+  - Unknown model: (j) 404 before any reservation; (k) 400; (l) always a default route.
+- **Decision (proposed):** (a), (e), (f), (h), and (j) with an optional default route.
+  - **Route table file.** `TOLLGATE_ROUTES_FILE` names a JSON file with three keys:
+    - `providers`: provider name → `type` (`mock`, `ollama`, `openai` or `anthropic`) and its settings.
+      `base_url` and `timeout_seconds` (at least 5, at most 600, default 60) are allowed for the three HTTP types
+      and rejected for `mock`. `api_key_env` is required for `openai` and `anthropic` and rejected for `mock` and
+      `ollama`. `default_max_tokens` is required for `anthropic` and rejected for every other type.
+    - `routes`: alias → 1 to 5 targets, each a `provider` and an optional upstream `model`; without one the
+      client's model is passed through.
+    - `default`: an optional list of targets, with the same rules as a route.
+
+    Unknown fields and duplicate keys at any level are rejected (Python's `json` would otherwise keep the last
+    duplicate silently). A key is never in the file: `api_key_env` names the environment variable that holds
+    it, read at startup, and a variable that is unset, empty or only whitespace is an error naming it. Every
+    error names the variable and the field path, never a value. The table is read where the other settings
+    are, from the same environment mapping, so tests never touch the process environment. Without the variable
+    a built-in table applies: one provider named `mock` of type `mock`, and a default route to it with no
+    upstream model, so behaviour stays as it is today.
+  - **Selection.** `Router.select(request) -> Route` matches `request.model` exactly against the aliases, then
+    uses the default route, and otherwise refuses with 404 (`type: invalid_request_error`,
+    `code: model_not_found`, `param: model`, message "The requested model is not available on this gateway.",
+    which does not echo the model, as ADR-0009 never echoes a rejected value) before any estimate or
+    reservation. A 404 carries no limit headers (amends ADR-0008, under which every authenticated chat response
+    carried them). The official SDK maps 404 to `NotFoundError`; whether OpenAI itself sends `model_not_found`
+    in this case was not checked.
+  - **Fallback.** The route's targets are tried in order, each at most once. The request goes to each target
+    with its upstream model. Only a retryable `ProviderError` (ADR-0010) moves on to the next target. Any other
+    error stops the route at once, and a route that runs out of targets ends in 502 (ADR-0008).
+  - **Tokens (ADR-0007 unchanged).** One reservation before the first attempt and one settle with the usage of
+    the attempt that served. The reservation is refunded in full when the route fails without a 2xx; a
+    `bad_response` is charged as reserved (ADR-0010).
+  - **Response.** The body's `model` is the upstream model the provider reported. A 200 also carries
+    `x-tollgate-provider` (the configured provider name) and `x-tollgate-fallbacks` (the number of failed
+    attempts before the one that served). Both, and the 404, are recorded in the OpenAPI document.
+  - Deferred to the backlog: same-target retries and `Retry-After`, cooldowns, load balancing, latency- or
+    cost-based routing, and fallback chains for context-length or content-policy errors.
+- **Consequences:**
+  - A broken route table stops the app at startup, not at the first request.
+  - A request has no total deadline: each of up to 5 targets can take its timeouts, which apply per network
+    operation, so a slow route can take much longer than the sum of its `timeout_seconds`. With no health
+    tracking, a primary whose host does not answer costs up to its connect timeout (5 seconds) on every
+    request until the configuration changes; a refused connection fails at once.
+  - A 502 does not tell the client which upstream failed or why.
+  - The contract gains the 404 and two response headers. `Router` and `Route` become final interfaces in
+    ARCHITECTURE section 3.
+  - ADR-0008's status is "Accepted - amended by ADR-0009, ADR-0010 and ADR-0011". Accepted by the owner as
+    written on 2026-11-13.
 
 ---
 
