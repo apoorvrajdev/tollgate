@@ -114,6 +114,10 @@ those adapters exist.
 - `providers` and `routes` are required (either may be empty); `default` is optional. Unknown fields and
   duplicate keys are rejected at every level, and so are an empty provider name, an empty alias and an empty
   upstream `model`.
+- A provider name is sent back to the client in the `x-tollgate-provider` header, so it must be made only of
+  visible ASCII characters (`!` to `~`): no space, control character, line break or non-ASCII character. A name
+  that is not fails at startup with `TOLLGATE_ROUTES_FILE: providers: has a provider name that is not made only
+  of visible ASCII characters (! to ~)`; the message never shows the name.
 - `type` is exactly `mock`, `ollama`, `openai` or `anthropic`. `base_url` and `timeout_seconds` (a whole number
   from 5 to 600, default 60) are allowed for the three HTTP types, not for `mock`. `api_key_env` is required for
   `openai` and `anthropic` and not allowed for the others. `default_max_tokens` (at least 1) is required for
