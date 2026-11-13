@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.api.models import ChatRequest, ChatResponse
 from app.main import create_app
 from app.providers.mock import MockProvider
-from tests.fakes import FakeClock, FixedIdSource, make_settings
+from tests.fakes import AUTH_HEADERS, FakeClock, FixedIdSource, make_settings
 
 URL = "/v1/chat/completions"
 CREATED_SECONDS = 1_700_000_000
@@ -28,7 +28,7 @@ OPENAI_REQUIRED_RESPONSE_FIELDS = {
 def make_client() -> TestClient:
     clock = FakeClock(CREATED_SECONDS)
     provider = MockProvider(clock, FixedIdSource(RESPONSE_ID))
-    return TestClient(create_app(make_settings(), clock, provider=provider))
+    return TestClient(create_app(make_settings(), clock, provider=provider), headers=AUTH_HEADERS)
 
 
 def valid_payload(**overrides: Any) -> dict[str, Any]:
@@ -201,7 +201,9 @@ class RecordingProvider:
 
 def test_injected_provider_is_the_one_that_answers() -> None:
     provider = RecordingProvider()
-    client = TestClient(create_app(make_settings(), FakeClock(), provider=provider))
+    client = TestClient(
+        create_app(make_settings(), FakeClock(), provider=provider), headers=AUTH_HEADERS
+    )
     body = client.post(URL, json=valid_payload()).json()
     assert body["id"] == "chatcmpl-recorded"
     assert [request.model for request in provider.requests] == ["mock-1"]
@@ -209,13 +211,15 @@ def test_injected_provider_is_the_one_that_answers() -> None:
 
 def test_invalid_request_never_reaches_the_provider() -> None:
     provider = RecordingProvider()
-    client = TestClient(create_app(make_settings(), FakeClock(), provider=provider))
+    client = TestClient(
+        create_app(make_settings(), FakeClock(), provider=provider), headers=AUTH_HEADERS
+    )
     client.post(URL, json=valid_payload(stream=True))
     assert provider.requests == []
 
 
 def test_default_provider_is_a_mock_provider_using_the_injected_clock() -> None:
-    client = TestClient(create_app(make_settings(), FakeClock(42.0)))
+    client = TestClient(create_app(make_settings(), FakeClock(42.0)), headers=AUTH_HEADERS)
     body = client.post(URL, json=valid_payload()).json()
     assert body["created"] == 42
     assert body["id"].startswith("chatcmpl-")

@@ -307,6 +307,13 @@
         "title": "Usage",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "description": "API key sent as 'Authorization: Bearer <key>'",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -366,8 +373,31 @@
               }
             },
             "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The authentication challenge: Bearer",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
         "summary": "Create Chat Completion"
       }
     }
