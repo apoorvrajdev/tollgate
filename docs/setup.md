@@ -71,6 +71,23 @@ invalid. The error names the variable and the reason, never the value. API keys 
 Numbers are plain ASCII digits, at most 18: `1_000`, `1e3`, `1.5`, signs and spaces inside the number are
 rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 
+### Authentication
+
+`POST /v1/chat/completions` requires `Authorization: Bearer <key>`, where the key is one of
+`TOLLGATE_API_KEYS`. Every failure gets the same 401 (a missing header, a scheme other than `Bearer`, an empty
+or unknown key, or more than one `Authorization` header), with a `WWW-Authenticate: Bearer` header. The scheme
+name is case-insensitive, and extra spaces between the scheme and the key (or after it) are ignored. A tab
+between them, or other whitespace such as a non-breaking space, is not; a trailing tab is removed by the HTTP
+parser (h11, which uvicorn uses here) before the gateway sees the header. The check runs before the body is
+read, so an unauthenticated request never gets a validation error. The authenticator keeps only SHA-256
+digests of the keys, and the digest is the caller id used later for rate limits; the configured keys themselves
+stay in the settings as masked secrets. The digests are unsalted, so use long random keys. Header bytes are
+read as UTF-8, so a non-ASCII key works only if the client sends it as UTF-8; plain printable ASCII keys avoid
+the question.
+
+`GET /health` needs no key. `/openapi.json` and `/docs` also need no key, which is a known gap: they describe
+the API but not any key or user data.
+
 Start the server through the app factory, with the variables set in your shell:
 
 ```bash

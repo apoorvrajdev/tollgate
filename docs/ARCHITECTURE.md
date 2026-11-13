@@ -1,7 +1,8 @@
 # Architecture
 
 **Status:** Phase 1 in progress. The app serves `GET /health` and `POST /v1/chat/completions`, which answers
-from a mock provider (tasks T-000 to T-102); there is no authentication, rate limiting, routing or caching yet.
+from a mock provider, behind API key authentication (tasks T-000 to T-103); there is no rate limiting, routing
+or caching yet.
 Everything in sections 2 to 4 describes the target design, not current code.
 Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
@@ -87,10 +88,13 @@ deliberate.
 | `.venv/` | Local virtual environment | no |
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
-body and handler, the chat router) and `app/providers/` (the `Provider` protocol and `MockProvider`), plus
-`clock.py`, `settings.py` and `main.py`. Planned: `limits/`, `routing/`, `cache/`. The OpenAPI document omits
-FastAPI's automatic 422, because the API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI`
-subclass that strips it.
+body and handler, API key authentication, the chat router) and `app/providers/` (the `Provider` protocol and
+`MockProvider`), plus `clock.py`, `settings.py` and `main.py`. Planned: `limits/`, `routing/`, `cache/`. The
+OpenAPI document omits FastAPI's automatic 422, because the API answers 400 (ADR-0008), so `create_app()`
+builds a small `FastAPI` subclass that strips it. Authentication has two parts: the chat router's
+`AuthenticatedRoute` checks the key before the body is read, so a caller without a key never sees a validation
+error, and the `require_api_key` dependency returns the caller identity and makes the OpenAPI document record
+the bearer scheme.
 
 ## 6. Conventions
 
