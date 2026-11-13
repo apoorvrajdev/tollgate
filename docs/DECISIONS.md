@@ -15,6 +15,7 @@ Accepted decisions change only through a new ADR.
 | [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted | 2026-11-12 |
+| [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Proposed | 2026-11-13 |
 
 ---
 
@@ -250,6 +251,54 @@ Accepted decisions change only through a new ADR.
     item for when the draft becomes an RFC.
   - The 429 and 401 `type` and `code` values copy observed OpenAI behaviour that OpenAI does not document.
     They may need to change if OpenAI changes.
+
+## ADR-0009
+
+**Validation error codes and `param` format (extends ADR-0008)** · Proposed · 2026-11-13
+
+- **Context:** ADR-0008 fixes the 400 body's `type` (`invalid_request_error`), says `param` names the field
+  "when known", and fixes `code: "unsupported_parameter"` with `param: "stream"` for streaming. It does not
+  fix `code` for any other rejection or the format of a nested `param`. Task T-102 needs both. Checked on
+  2026-11-13:
+  - OpenAI's error-codes guide documents no `code` list and no `param` format for validation errors
+    (developers.openai.com/api/docs/guides/error-codes).
+  - Real bodies quoted in third-party issues write nested params as `messages[0].role` and
+    `messages[3].content[0].type` (openai-python issue 2047, opened 2025-01-22; langgraphjs issue 506, opened
+    2024-09-23). No quoted body uses `messages.0.role`.
+  - Observed, undocumented codes: `missing_required_parameter`, `invalid_type`, `unsupported_parameter`,
+    `unsupported_value` and `decimal_above_max_value`. A missing top-level `model` or `messages` was quoted
+    with `code: null` and `param: null`, in bodies from 2023 and 2025.
+  - No real body was found for an invalid role value that the model accepts as a role, so that code is
+    unverified.
+- **Options:** (a) copy OpenAI's observed codes one by one, such as `decimal_above_max_value`; (b) a small
+  vocabulary of our own that follows OpenAI's names where they exist; (c) `code: null` for everything except
+  `stream`.
+- **Decision (proposed):** (b), with the `param` format `messages[0].role`.
+  - `param` is the field path without the leading `body`: an index is written `[i]` and a name `.name`. It is
+    `null` for malformed JSON and when the whole body is wrong.
+  - `code` is chosen from the first validation error:
+
+    | Case | `code` |
+    | --- | --- |
+    | Required field absent, including an empty body | `missing_required_parameter` |
+    | Streaming, `n` above 1, array `content` | `unsupported_parameter` |
+    | Malformed JSON | `invalid_json` |
+    | Wrong type: a string, integer, float, boolean, list or object where another type is required, or a number or boolean that cannot be parsed (an explicit set of pydantic error types) | `invalid_type` |
+    | Anything else: out of range, empty, unknown role, a fractional number for an integer field, text that is not valid Unicode | `invalid_value` |
+
+  - Only the first error is reported, in field declaration order, so the response is deterministic.
+  - The message never contains the rejected value. Unsupported-parameter messages are fixed texts; others read
+    `Invalid '<param>': <reason>`.
+  - Request fields the gateway does not model, such as `top_p`, `stop` and `tools`, are ignored, not rejected.
+    A client that sends them gets a normal answer and the parameters have no effect.
+- **Consequences:**
+  - SDK clients see the usual 400 `BadRequestError` with a `param` they can read.
+  - Where OpenAI's observed bodies differ (`code: null` for a missing `model`, `decimal_above_max_value` for a
+    temperature above 2), this gateway's codes are coarser or different. They are our contract, recorded in the
+    OpenAPI snapshot only as plain strings, so a later change needs no schema change but does need a new ADR.
+  - Silently ignored parameters can surprise a client that expects `stop` to work. Rejecting them is a
+    separate decision for when the first real provider adapter arrives.
+  - If this ADR is accepted, ADR-0008's status becomes "Accepted - amended by ADR-0009".
 
 ---
 
