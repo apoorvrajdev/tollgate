@@ -15,12 +15,14 @@ Each chat completion is routed by its `model` to an ordered list of provider tar
 route table file, and falls back to the next target on retryable failures. Ollama, OpenAI and Anthropic
 adapters are written on plain `httpx` and tested only through `httpx.MockTransport`. One reservation and one
 settle per request, as in Phase 1. Planned 2026-11-13; ADR-0010 and ADR-0011 are proposed and must be accepted
-before T-201 starts.
+before T-201 starts. The README and the ARCHITECTURE status line are updated in the gate close-out pull
+request, as for Phase 1.
 
 **Gate (owner signs off):**
 
 - [ ] Every Phase 2 task is `done`, and `python scripts/check.py` is green locally and in CI
-- [ ] ADR-0010 and ADR-0011 accepted or revised
+- [ ] ADR-0010 and ADR-0011 accepted or revised, and the status lines of ADR-0007 and ADR-0008 updated to name
+      the ADRs that amend them
 - [ ] Routes come from a route table validated at startup; an unknown model gets 404 before any reservation;
       fallback happens only on retryable failures, each target is tried at most once, and each request has one
       reservation and one settle
@@ -74,7 +76,7 @@ No gateway features yet. The owner signed off the gate on 2026-11-12, and Phase 
 ## Board
 
 Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
-T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-206 in
+T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-207 in
 number order. The rows below are in delivery order; the cards further down are listed by ID.
 
 | ID | Title | Phase | Status | Depends on |
@@ -94,10 +96,11 @@ number order. The rows below are in delivery order; the cards further down are l
 | T-108 | Rate limiting on chat completions | 1 | done | T-103, T-104, T-105, T-106 |
 | T-201 | Provider errors and the route table | 2 | todo | Phase 1 gate; ADR-0010 and ADR-0011 accepted |
 | T-202 | Routing and fallback on chat completions | 2 | todo | T-201 |
-| T-203 | Ollama adapter and client shutdown | 2 | todo | T-202 |
-| T-204 | OpenAI adapter | 2 | todo | T-203 |
-| T-205 | Anthropic adapter | 2 | todo | T-203 |
-| T-206 | Real-provider guide and the owner's Ollama run | 2 | todo | T-203, T-204, T-205 |
+| T-203 | Close the clients the app builds on shutdown | 2 | todo | T-202 |
+| T-204 | Ollama adapter | 2 | todo | T-203 |
+| T-205 | OpenAI adapter | 2 | todo | T-204 |
+| T-206 | Anthropic adapter | 2 | todo | T-204 |
+| T-207 | Real-provider guide and the owner's Ollama run | 2 | todo | T-204, T-205, T-206 |
 
 ---
 
@@ -583,47 +586,49 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Goal:** the failure taxonomy and the route table exist, and a bad route table stops the app at startup,
   before anything routes with it.
 - **Context:** ADR-0010, ADR-0011, `app/providers/`, `app/settings.py`, `app/main.py`, `tests/test_settings.py`,
-  `tests/test_app_wiring.py`.
+  `tests/test_app_wiring.py`, `tests/fakes.py`.
 - **Depends on:** the Phase 1 gate (signed off); ADR-0010 and ADR-0011 accepted.
 - **Deliverables:**
   - `app/providers/errors.py`: `ProviderError` with a `kind` (`connection`, `timeout`, `rate_limited`,
     `upstream_status`, `bad_response`) and an optional `status_code`, and a `retryable` property that is true
     exactly for `connection`, `timeout`, `rate_limited`, and `upstream_status` with a status of 500 or above.
     The message is built from the kind and the status only.
-  - `app/routing/config.py`: pydantic models for the route table file (ADR-0011): `providers`, `routes`, optional
-    `default`, unknown fields rejected; a route has 1 to 5 targets; `timeout_seconds` is above 0 and at most
-    600 (default 60); `default_max_tokens` is required for `anthropic` and rejected for any other type;
-    `api_key_env` is required for `openai` and `anthropic` and rejected for `mock` and `ollama`; a target names
-    a defined provider and an optional upstream `model`.
-  - `load_route_table(path, environ)`: reads and validates the file and the keys it names, which are kept as
-    `SecretStr`. Every error is a `SettingsError` naming `TOLLGATE_ROUTES_FILE` and the field path (for example
-    `routes.fast[0].provider`), or naming the unset `api_key_env` variable, and never shows a value from the file
-    or the environment.
-  - `Settings` gains `routes_file` from `TOLLGATE_ROUTES_FILE`. `create_app()` loads the table at startup into
-    `app.state.route_table`; without the variable it uses the built-in table (one `mock` provider, a default
-    route to it with no upstream model). Nothing in the request path uses the table yet.
+  - `app/routing/config.py`: pydantic models for the route table file with every rule in ADR-0011 (provider
+    types and which settings each type allows or requires, 1 to 5 targets, `timeout_seconds` from 5 to 600 with
+    default 60, an optional `default` target list, unknown fields rejected), and a loader that rejects duplicate
+    keys at any level (`object_pairs_hook`) and reads each `api_key_env` variable, keeping the keys as
+    `SecretStr`.
+  - `Settings.from_env(environ)` reads `TOLLGATE_ROUTES_FILE` and loads the table, taking the keys from the same
+    `environ`, so tests never touch `os.environ`. Every error is a `SettingsError` naming `TOLLGATE_ROUTES_FILE`
+    and the field path (for example `routes.fast[0].provider`), or naming the `api_key_env` variable, and never
+    shows a value from the file or the environment. Without the variable `Settings` holds the built-in table:
+    one provider named `mock` of type `mock` and a default route to it with no upstream model. Nothing in the
+    request path uses the table yet.
   - `docs/setup.md`: the variable and the file format.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. A valid file loads into the expected table: aliases, target order, upstream models, defaults and keys
      exact.
-  2. Each invalid file fails startup with a `SettingsError` naming the variable and the field path, and no
-     value from the file in the message: malformed JSON, an unreadable path, an unknown field, an unknown
-     provider type, a target naming an undefined provider, an empty route, six targets, a timeout of 0 or above
-     600, `default_max_tokens` missing for `anthropic` or present for another type, `api_key_env` missing where
-     required or present where not.
-  3. A provider whose `api_key_env` variable is unset fails naming that variable; a key never appears in a
-     `repr` or an error.
+  2. Each invalid file fails with a `SettingsError` naming the variable and the field path, and no value from
+     the file in the message: malformed JSON, an unreadable path, a duplicate provider name, alias or field, an
+     unknown field, an unknown provider type, a target naming an undefined provider, an empty route, six
+     targets, a timeout of 4 or 601, `base_url` or `timeout_seconds` on `mock`, `default_max_tokens` missing for
+     `anthropic` or present for another type, `api_key_env` missing for `openai` or `anthropic` or present for
+     `mock` or `ollama`.
+  3. A provider whose `api_key_env` variable is unset, empty or only whitespace fails naming that variable; a
+     key never appears in a `repr` or an error.
   4. Without `TOLLGATE_ROUTES_FILE`, the built-in table is used and every existing test passes unchanged.
   5. `retryable` is exact at its boundaries: `upstream_status` 499 is not retryable, 500 and 529 are;
      `rate_limited`, `connection` and `timeout` are; `bad_response` is not.
 - **Verification:** `python scripts/check.py` green; mutation table (the 500 boundary moved to 501 or 499,
-  `rate_limited` not retryable, `bad_response` retryable, the target limit 5 changed to 6 or 4, unknown fields
-  allowed, a file value or a key in an error message, the field path missing from the message, the built-in
-  table changed, `default_max_tokens` accepted for `openai`); `gh pr checks <n> --watch`.
+  `rate_limited` not retryable, `bad_response` retryable, the target limit 5 changed to 6 or 4, the timeout
+  bounds 5 and 600 moved by one, unknown fields allowed, duplicate keys kept, an unset or empty key variable
+  accepted, `api_key_env` accepted for `ollama`, `default_max_tokens` accepted for `openai`, a file value or a
+  key in an error message, the field path missing from the message, the built-in table changed); `gh pr checks
+  <n> --watch`.
 - **Branch and commits:** `feat/t-201-route-table`; `feat(providers): add the provider error taxonomy`,
   `feat(routing): load and validate the route table`, `docs(tasks): complete T-201`.
-- **Size:** about 350 lines.
+- **Size:** about 380 lines.
 
 ### T-202 - Routing and fallback on chat completions
 
@@ -631,26 +636,36 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Goal:** each chat completion is routed by its `model` and falls back along its route on retryable
   failures, with one reservation and one settle.
 - **Context:** ADR-0007, ADR-0008, ADR-0010, ADR-0011, `app/api/chat.py`, `app/main.py`, `app/routing/`,
-  `tests/test_chat_rate_limits.py`, ARCHITECTURE section 3.
+  `tests/test_chat_rate_limits.py`, `tests/test_chat_openapi.py`, `tests/test_chat_completions.py`,
+  ARCHITECTURE sections 2, 3 and 5.
 - **Depends on:** T-201.
 - **Deliverables:**
   - `app/routing/router.py`: `Router.select(request) -> Route` (an ordered tuple of targets), or an
     `UnknownModelError` when no alias matches and there is no default route.
-  - A provider registry built by `create_app()`: provider name to `Provider`. This task builds the `mock` type
-    only; a table naming a type not built yet fails startup with a `SettingsError` naming the variable, and
-    each adapter task removes its type from that list. The existing `provider=` keyword replaces the built-in
-    `mock` provider; a new `providers=` keyword (name to `Provider`) lets tests supply several.
+  - A provider registry built by `create_app()`: provider name to `Provider`, kept on `app.state`. This task
+    builds the `mock` type only; a table naming a type not built yet fails startup with a `SettingsError`
+    naming the variable, and each adapter task removes its type from that list. The existing `provider=`
+    keyword replaces the registry entry named `mock`; a new `providers=` keyword (name to `Provider`) lets
+    tests supply several. The route reads the registry, the router and the limiter from `app.state` on every
+    request, so tests that swap them after `create_app()` keep working; the follow-up in
+    `tests/test_chat_rate_limits.py` that swaps `app.state.provider` is changed to swap the registry entry, with
+    its assertion unchanged.
   - The route: authenticate, validate, select (404 before any estimate or reservation), estimate, reserve, then
     try each target in order with the request's `model` replaced by the target's upstream model (the client's
     model when the target has none). A retryable `ProviderError` moves to the next target. Any other error, or
     the last target failing, ends the route. Success settles once with that attempt's usage. A route that ends
     without a 2xx refunds the whole reservation; a `bad_response` is charged as reserved. Both give the
     ADR-0008 502.
-  - The 404 body: `type: invalid_request_error`, `code: model_not_found`, `param: model`, no limit headers.
+  - The 404 body from ADR-0011, with its fixed message and no limit headers.
   - A 200 carries `x-tollgate-provider` and `x-tollgate-fallbacks`, and its body `model` is the one the provider
-    reported. The 404 and the two headers are in the OpenAPI document; the snapshot is regenerated in the route
+    reported. The 404 and the two headers are in the OpenAPI document. In `tests/test_chat_openapi.py` the
+    response set becomes exactly `{200, 400, 401, 404, 429, 502}` and the 200 header set exactly the three limit
+    headers plus the two new ones, so the assertions stay exact. The snapshot is regenerated in the route
     commit, so every commit passes the check (as in T-102 and T-108).
-  - ARCHITECTURE section 3: `Router`, `Route` and `ProviderError` marked final; section 2 updated.
+  - The 502 description in the OpenAPI document and the docstring of `app/api/chat.py` say that a provider
+    failure is refunded and an untranslatable answer is charged.
+  - ARCHITECTURE: section 3 marks `Router`, `Route` and `ProviderError` final; section 2 and the section 5
+    layout and chat-route paragraph describe routing, fallback and the `bad_response` charge.
 - **Contract:** changes (the 404 and two headers on 200); snapshot regenerated in the route commit.
 - **Acceptance criteria:**
   1. An unknown model with no default route gets the 404 body, no limiter call and no limit headers. With a
@@ -664,38 +679,67 @@ number order. The rows below are in delivery order; the cards further down are l
      charged (a follow-up request shows the balance).
   5. Every target failing with a retryable error: each is called exactly once, in order, then 502 and a full
      refund.
-  6. Without a route table file, every T-108 test passes unchanged, and each 200 carries
-     `x-tollgate-provider: mock` and `x-tollgate-fallbacks: 0`.
+  6. Without a route table file, every behavioural test in `tests/test_chat_rate_limits.py` and
+     `tests/test_chat_completions.py` passes, unchanged except for the one registry swap above, and each 200
+     carries `x-tollgate-provider: mock` and `x-tollgate-fallbacks: 0`.
   7. A route table naming a provider type that is not built yet fails startup naming the variable.
 - **Verification:** `python scripts/check.py` green; mutation table (fallback on a non-retryable error, no
   fallback on a retryable one, targets in another order, a target tried twice, settle with the failed attempt's
   usage, a second settle, the refund skipped when every target fails, `bad_response` refunded, the 404 after the
-  reservation, the fallback count off by one, the client's alias sent upstream instead of the target's model);
-  `gh pr checks <n> --watch`.
+  reservation, limit headers on the 404, the default route ignored, the fallback count off by one,
+  `x-tollgate-provider` naming the first target instead of the one that served, the client's alias sent
+  upstream instead of the target's model); `gh pr checks <n> --watch`.
 - **Branch and commits:** `feat/t-202-routing-fallback`; `feat(routing): select a route and fall back on
   retryable failures`, `feat(api): route chat completions` (with the regenerated snapshot),
   `docs(tasks): complete T-202`.
-- **Size:** about 400 lines plus the snapshot diff.
+- **Size:** about 400 lines plus the snapshot diff; the card most likely to run over, so its plan is shown to
+  the owner if it does.
 
-### T-203 - Ollama adapter and client shutdown
+### T-203 - Close the clients the app builds on shutdown
+
+- **Status:** todo
+- **Goal:** the app closes every client it builds when it shuts down, starting with the Redis client built from
+  the URL (the first known gap in the T-108 Log), so the adapter tasks only register their HTTP clients.
+- **Context:** `app/main.py`, `tests/test_app_wiring.py`, `tests/test_chat_rate_limits.py`.
+- **Depends on:** T-202.
+- **Deliverables:**
+  - An app lifespan in `create_app()` that, on shutdown, closes the clients the app built, in the reverse order
+    of building, and continues past a client whose close raises. The Redis client built with `from_url` is
+    registered; an injected client is not.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. With the redis backend and no injected client, the client built from the URL is closed when the app shuts
+     down (the lifespan run through `TestClient` as a context manager), and no connection is opened.
+  2. An injected Redis client is still open after shutdown.
+  3. With two registered clients, both are closed in reverse order, and a close that raises does not stop the
+     other.
+  4. The memory backend builds nothing and closes nothing.
+- **Verification:** `python scripts/check.py` green; mutation table (the lifespan never closes, the injected
+  client closed, the order not reversed, the first failing close stopping the rest, the memory backend
+  registering a client); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-203-client-shutdown`; `feat(app): close the clients the app builds on
+  shutdown`, `docs(tasks): complete T-203`.
+- **Size:** about 150 lines.
+
+### T-204 - Ollama adapter
 
 - **Status:** todo
 - **Goal:** a route can be served by a local Ollama through its native API, tested only with
-  `httpx.MockTransport`, and the app closes the clients it builds.
+  `httpx.MockTransport`.
 - **Context:** ADR-0010, ADR-0011, `app/providers/`, `app/main.py`, `requirements.txt`,
   `requirements-dev.txt`, `pyproject.toml`.
-- **Depends on:** T-202.
+- **Depends on:** T-203.
 - **Deliverables:**
   - `httpx==0.28.1`, `httpcore==1.0.9` and `certifi==2026.10.23` move from `requirements-dev.txt` to
     `requirements.txt`, and `httpx>=0.28.1` moves to the runtime dependencies in `pyproject.toml`. Both files
     install with `--only-binary=:all:` on Windows and in CI, `pip check` is clean, and no package is added.
+  - `IdSource` and `UuidIdSource` move from `app/providers/mock.py` to `app/providers/ids.py`, so adapters do
+    not import from the mock.
+  - `create_app()` builds one `httpx.AsyncClient` per HTTP provider in the route table (base URL, default
+    `http://localhost:11434` for Ollama, and the ADR-0010 timeouts), registers each for shutdown (T-203), and
+    gains an `http_transport=` keyword used by every client it builds, so tests pass an `httpx.MockTransport`.
   - `app/providers/ollama.py`: `OllamaProvider(client, clock, id_source)` posting to `/api/chat` by the
     ADR-0010 rules. The registry builds the `ollama` type.
-  - `create_app()` builds one `httpx.AsyncClient` per HTTP provider (base URL, default
-    `http://localhost:11434` for Ollama, and the timeout with connect 5 seconds), and gains an
-    `http_transport=` keyword used by every client it builds, so tests pass an `httpx.MockTransport`. An app
-    lifespan closes, on shutdown, every HTTP client the app built and the Redis client it built from the URL
-    (the first known gap in the T-108 Log); clients that were injected are left open.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. Request translation is exact: `POST /api/chat`, body `model`, `messages` of `role` and `content`,
@@ -705,28 +749,30 @@ number order. The rows below are in delivery order; the cards further down are l
      `prompt_eval_count` and `eval_count`, an absent count being 0, and the total their sum; `id` from the id
      source, `created` from the clock, `model` from the response.
   3. Errors: a connection error and a timeout give retryable kinds; 404 `{"error": "model 'x' not found"}` gives
-     a non-retryable `upstream_status`; 500 a retryable one; a 2xx with invalid JSON, no `message`, a missing or
-     unknown `done_reason`, or a negative count gives `bad_response`. No message contains the response body.
-  4. On shutdown, the clients the app built and the Redis client it built from the URL are closed, and injected
-     clients are not.
+     a non-retryable `upstream_status`; 500 a retryable one; a 2xx that cannot be decoded, invalid JSON, no
+     `message`, a missing or unknown `done_reason`, or a negative count gives `bad_response`. No message
+     contains the response body.
+  4. The clients the app built for HTTP providers are closed on shutdown.
   5. Through the whole app with a route table and a `MockTransport`, Ollama serves a 200, and a follow-up request
      shows the balance settled with Ollama's usage; a route of Ollama then `mock` falls back on an Ollama 503.
   6. The requirements move adds no package; the install passes on Windows and in CI.
 - **Verification:** `python scripts/check.py` green; mutation table (`"stream": false` dropped, `num_predict`
   from the wrong field or `max_completion_tokens` ignored, an absent count raising or counting 1, the total from
-  one count, 404 retryable, 500 not retryable, a timeout not retryable, the body in an error message, the
-  lifespan not closing a client, an injected client closed, `name` forwarded); `gh pr checks <n> --watch`.
-- **Branch and commits:** `feat/t-203-ollama-adapter`; `build(deps): move httpx to the runtime requirements`,
-  `feat(app): close the clients the app builds on shutdown`, `feat(providers): add the Ollama adapter`,
-  `docs(tasks): complete T-203`.
-- **Size:** about 380 lines.
+  one count, an unknown `done_reason` accepted, `id` or `created` taken from the response or the system clock,
+  404 retryable, 500 not retryable, a timeout not retryable, a timeout checked after `TransportError`, the body
+  in an error message, an HTTP client not registered for shutdown, `name` forwarded); `gh pr checks <n>
+  --watch`.
+- **Branch and commits:** `feat/t-204-ollama-adapter`; `build(deps): move httpx to the runtime requirements`,
+  `refactor(providers): move the id source out of the mock`, `feat(providers): add the Ollama adapter`,
+  `docs(tasks): complete T-204`.
+- **Size:** about 350 lines.
 
-### T-204 - OpenAI adapter
+### T-205 - OpenAI adapter
 
 - **Status:** todo
 - **Goal:** a route can be served by OpenAI chat completions, tested only with `httpx.MockTransport`.
-- **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-203 adapter as the pattern.
-- **Depends on:** T-203.
+- **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
+- **Depends on:** T-204.
 - **Deliverables:**
   - `app/providers/openai.py`: `OpenAIProvider(client, api_key)` posting to `/v1/chat/completions` (default
     base URL `https://api.openai.com`) with `Authorization: Bearer <key>`, by the ADR-0010 rules. The registry
@@ -748,16 +794,16 @@ number order. The rows below are in delivery order; the cards further down are l
   taken only from `max_completion_tokens`, the key in an error, a refusal mapped to `stop`, a missing `usage`
   settled as 0, 429 not retryable, 401 retryable, the `Authorization` scheme wrong or missing, `user`
   forwarded); `gh pr checks <n> --watch`.
-- **Branch and commits:** `feat/t-204-openai-adapter`; `feat(providers): add the OpenAI adapter`,
-  `docs(tasks): complete T-204`.
+- **Branch and commits:** `feat/t-205-openai-adapter`; `feat(providers): add the OpenAI adapter`,
+  `docs(tasks): complete T-205`.
 - **Size:** about 300 lines.
 
-### T-205 - Anthropic adapter
+### T-206 - Anthropic adapter
 
 - **Status:** todo
 - **Goal:** a route can be served by the Anthropic Messages API, tested only with `httpx.MockTransport`.
-- **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-203 adapter as the pattern.
-- **Depends on:** T-203.
+- **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
+- **Depends on:** T-204.
 - **Deliverables:**
   - `app/providers/anthropic.py`: `AnthropicProvider(client, api_key, default_max_tokens, clock, id_source)`
     posting to `/v1/messages` (default base URL `https://api.anthropic.com`) with `x-api-key`,
@@ -768,30 +814,31 @@ number order. The rows below are in delivery order; the cards further down are l
   1. Request translation is exact: system messages joined with `\n`, in order, into `system`, and absent when
      there are none; the other messages in order with `role` and `content`; no `name`, `temperature` or `user`;
      `max_tokens` from the client's `max_completion_tokens`, else `max_tokens`, else `default_max_tokens`.
-  2. Response translation: only `text` blocks joined into the reply (thinking blocks ignored); `stop_reason`
-     end_turn and stop_sequence to `stop`, max_tokens and model_context_window_exceeded to `length`, refusal to
-     `content_filter`; prompt tokens include both cache fields, an absent or null one counting 0; `id` from the
-     id source, `created` from the clock.
+  2. Response translation: the `text` blocks joined in order with no separator (thinking blocks ignored), and
+     an empty reply when there is none; `stop_reason` end_turn and stop_sequence to `stop`, max_tokens and
+     model_context_window_exceeded to `length`, refusal to `content_filter`; prompt tokens include both cache
+     fields, an absent or null one counting 0; `id` from the id source, `created` from the clock.
   3. Errors: 429, 500 and 529 give retryable kinds; 400, 401, 402, 403 and 404 non-retryable; a connection
-     error and a timeout retryable; tool_use, pause_turn or another `stop_reason`, no text block, or a negative
-     count gives `bad_response`.
+     error and a timeout retryable; tool_use, pause_turn or another `stop_reason`, or a negative count gives
+     `bad_response`.
   4. The key never appears in an error message or a `repr`.
   5. Through the whole app, a route of Anthropic then `mock` falls back on a 529.
 - **Verification:** `python scripts/check.py` green; mutation table (system messages left in `messages`, only
   the first system message kept, `temperature` forwarded, `default_max_tokens` used when the client gave a max,
-  cache tokens not counted, thinking text included, 529 not retryable, refusal mapped to `stop`, the version
-  header missing); `gh pr checks <n> --watch`.
-- **Branch and commits:** `feat/t-205-anthropic-adapter`; `feat(providers): add the Anthropic adapter`,
-  `docs(tasks): complete T-205`.
+  cache tokens not counted, a null cache field raising, thinking text included, a separator added between text
+  blocks, a refusal with no text block turned into `bad_response`, 529 not retryable, refusal mapped to `stop`,
+  `model_context_window_exceeded` mapped to `stop`, the version header missing); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-206-anthropic-adapter`; `feat(providers): add the Anthropic adapter`,
+  `docs(tasks): complete T-206`.
 - **Size:** about 350 lines.
 
-### T-206 - Real-provider guide and the owner's Ollama run
+### T-207 - Real-provider guide and the owner's Ollama run
 
 - **Status:** todo
 - **Goal:** the owner can run the gateway against real providers by hand, and one run against a local Ollama is
   recorded.
 - **Context:** ADR-0004, ADR-0010, ADR-0011, `docs/setup.md`, `app/routing/config.py`.
-- **Depends on:** T-203, T-204, T-205.
+- **Depends on:** T-204, T-205, T-206.
 - **Deliverables:**
   - `docs/routes.example.json`: one provider of each type and a route with fallback; keys only as
     `api_key_env` names.
@@ -802,6 +849,7 @@ number order. The rows below are in delivery order; the cards further down are l
   - An OWNER-CHECK: the owner runs the gateway with an Ollama route against a local Ollama, and the Log records
     the date, the Ollama version, the model, the status, the usage and the limit headers seen. Runs against
     OpenAI or Anthropic are optional, with the owner's own keys, recorded the same way or marked "not run".
+  - The README and the ARCHITECTURE status line are updated in the gate close-out pull request, as for Phase 1.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. The example file loads in a test with placeholder environment values.
@@ -809,8 +857,8 @@ number order. The rows below are in delivery order; the cards further down are l
   3. OWNER-CHECK: the Ollama run is recorded in the Log, or the owner waives it in writing.
 - **Verification:** `python scripts/check.py` green; mutation table for the example-file test (an unknown field
   added to the example, a target naming an undefined provider); `gh pr checks <n> --watch`.
-- **Branch and commits:** `docs/t-206-provider-guide`; `docs(setup): add the real-provider guide and example
-  routes`, `test(routing): load the example route table`, `docs(tasks): complete T-206`.
+- **Branch and commits:** `docs/t-207-provider-guide`; `docs(setup): add the real-provider guide and example
+  routes`, `test(routing): load the example route table`, `docs(tasks): complete T-207`.
 - **Size:** about 150 lines.
 
 ## Later phases (broken into tasks at each gate)
@@ -818,7 +866,7 @@ number order. The rows below are in delivery order; the cards further down are l
 | Phase | Epic |
 | --- | --- |
 | 1 | Token-aware rate limiting: planned 2026-11-12 as T-101 to T-108 (see the current phase) |
-| 2 | Model routing: planned 2026-11-13 as T-201 to T-206 (see the current phase) |
+| 2 | Model routing: planned 2026-11-13 as T-201 to T-207 (see the current phase) |
 | 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation |
 | 4 | Docker Compose, observability, reproducible load benchmarks |
 | 5 | Demo and write-up |
@@ -852,8 +900,11 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   hand today. A Dependabot configuration for the `github-actions` ecosystem would propose those updates as pull
   requests. It adds a configuration file to the repository, so it is a task of its own, with a check that the
   proposed updates keep the version comment next to each SHA.
-- **Same-target retries and cooldowns:** retrying a target with backoff and honouring `Retry-After`, and a
-  cooldown that skips a target after repeated failures, measured on the injected clock (deferred by ADR-0011).
+- **Same-target retries, cooldowns and a request deadline:** retrying a target with backoff and honouring
+  `Retry-After`, a cooldown that skips a target after repeated failures, measured on the injected clock, and a
+  total deadline per request across all targets (deferred by ADR-0010 and ADR-0011).
+- **Malformed Redis URL:** turn redis-py's `ValueError` for a `TOLLGATE_REDIS_URL` with an unknown scheme into
+  a `SettingsError` naming the variable (T-108 known gap 2).
 - **Redis outage and settle failures:** decide fail-open or fail-closed when Redis is down (today a 500); keep a
   completion when settle fails after the provider answered; refund when a client disconnects mid-request (T-108
   known gaps 3 to 5).
@@ -904,4 +955,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-13 | T-108 | Chat completions are rate limited. `create_app()` builds the estimator and the limiter chosen by `TOLLGATE_LIMITER_BACKEND`, on the injected clock: `InMemoryRateLimiter`, or `RedisRateLimiter` on an injected client (tests pass fakeredis) or one built with `Redis.from_url`, which connects lazily. With the redis backend, a capacity or rate above 75,059,993,789 is a startup `SettingsError` naming the variable, without the value. The route estimates, reserves under the authenticated caller id (never a request value), answers a refusal with 429 (`tokens`, `rate_limit_exceeded`; `Retry-After` only when waiting can help), otherwise calls the provider and settles with `usage.total_tokens`; only the provider call is guarded, and a provider exception refunds the whole reservation and gives 502 (`api_error`, `provider_error`, a fixed message). `app/api/limit_headers.py` builds the three `x-ratelimit-*-tokens` headers and `Retry-After` from a `Decision`. Owner decisions: a 200's and a 502's headers come from the reserve decision (criterion 2 tested through a follow-up request); an authenticated 400 carries no limit headers; `60m0s` for an hour or more. The snapshot gained 87 lines and lost none (one line gained a comma), regenerated in the route commit; no dependency added; `RateLimiter` and `Decision` unchanged. `scripts/check.py` passed (14 contract and 653 other tests, 45 deselected). Mutation check on scratch copies: the card's seven mutations and 29 more (key from the body or the raw key, settle with the estimate or the reservation, `max_tokens` dropped, the guard widened to `reserve`, exception text in the 502, headers missing or from a probe, injected client ignored, every range-check variant, swapped rate and capacity, `SystemClock` on the memory backend, provider or settle called on a refusal) and three OpenAPI-only ones (39 in all) were caught in the first round. Reviewer APPROVE with four Minor findings, all applied in one feedback iteration: the remaining header's OpenAPI description now says "after the limiter's decision", a test that a settle error on the success path is neither a 502 nor refunded, the Redis test advances the clock so a Redis-backend `SystemClock` mutant fails, and ARCHITECTURE's layout. After it, 41 of 41 mutations were caught (the 39 plus those two new mutants: settle moved inside the guard, and the Redis-backend `SystemClock`) | Verifier tables, two rounds; `check.py` output; `gh pr checks` is recorded in the pull request |
 | 2026-11-13 | T-108 | Known gaps, accepted by the owner and left for later tasks: (1) the Redis client that `create_app()` builds from the URL is never closed on shutdown (no lifespan hook); (2) a malformed `TOLLGATE_REDIS_URL` scheme gives redis-py's `ValueError`, which does not echo the URL, rather than a `SettingsError`; (3) a Redis outage during `reserve` or `settle` gives a 500 with no limit headers (fail closed); (4) a `settle` that fails after a successful provider call loses the completion and gives a 500, never a refund or a 502 (pinned by a test); (5) a client that disconnects mid-request (`CancelledError`) leaves the reservation charged at the estimate; (6) a negative `total_tokens` from a provider makes `settle` raise. Also still open from T-103: each request hashes the key twice (the route class and the `require_api_key` dependency) | Plan review and reviewer findings |
 | 2026-11-13 | - | Phase 1 gate signed off by the owner: all eight gate items met, the README item by this pull request (the sign-off takes effect when it merges). ADR-0006, ADR-0007 and ADR-0008 stay accepted as written (ADR-0009, accepted 2026-11-13, amends ADR-0008). Gate check run the same day on `main` at `c5060af`: T-101 to T-108 `done`; `scripts/check.py` passed (14 contract and 653 other tests, 45 deselected); the `ci` run `43448484605` succeeded, its `pytest` step showing 667 passed and 45 deselected and its `redis integration` step 45 passed against `redis:7.4.12`; the committed snapshot lists the 200, 400, 401, 429 and 502 responses, with the limit headers on 200, 429 and 502 and none on 400; each Phase 1 task that added tests has a mutation table in this Log, and every survivor is explained as an equivalent mutant (T-103: 2, T-104: 2, T-105: 4, T-106: 3); tests use no network, the only HTTP client being `httpx` over an in-process ASGI transport; 112 commits, all with the owner's author email, none with a trailer or attribution line. The README was rewritten to describe what is built, with the Redis claim limited to Redis 7.4.12 in CI and a list of the known gaps. The known gaps in the T-108 rows carry into Phase 2 | `scripts/check.py` output; `gh run view 43448484605 --log`; `tests/contract/openapi.json`; `git log` (read-only) |
-| 2026-11-13 | - | Phase 2 planned: cards T-201 to T-206, the Phase 2 gate and board rows; ADR-0010 (plain httpx adapters, translation rules, failure taxonomy, `bad_response` charged as reserved, amending ADR-0007) and ADR-0011 (route table file, ordered fallback on retryable failures, 404 for an unknown model, two response headers) proposed. Research checked on this date: package versions, licences, dependencies and wheels against the PyPI JSON API (moving httpx 0.28.1 to runtime adds no package; the official SDKs would add 8, built on `httpx2`, and retry by default; `tiktoken` would add 5 and its encoding files' licence is still unstated); Ollama, OpenAI and Anthropic request, response and error formats in their documentation and source; fallback behaviour in LiteLLM, OpenRouter, Portkey, Kong and Envoy AI Gateway documentation and source. Nothing was installed. Of the T-108 known gaps, the unclosed Redis client is closed in T-203 and a negative provider count becomes `bad_response` (ADR-0010); the others are backlog items | `docs/DECISIONS.md`; the planning pull request |
+| 2026-11-13 | - | Phase 2 planned: cards T-201 to T-207, the Phase 2 gate and board rows; ADR-0010 (plain httpx adapters, translation rules, failure taxonomy, `bad_response` charged as reserved, amending ADR-0007 and ADR-0008) and ADR-0011 (route table file, ordered fallback on retryable failures, 404 for an unknown model, two response headers, amending ADR-0008) proposed. A review of the first draft found that T-202 overstated which existing tests pass unchanged, that both ADRs amended ADR-0008 without saying so, and that the Anthropic card added a failure rule the ADR did not have; all were corrected in the planning pull request before it went to the owner, and the client-shutdown work was split out of the Ollama card. Research checked on this date: package versions, licences, dependencies and wheels against the PyPI JSON API (moving httpx 0.28.1 to runtime adds no package; the official SDKs would add 8, built on `httpx2`, and retry by default; `tiktoken` would add 5 and its encoding files' licence is still unstated); Ollama, OpenAI and Anthropic request, response and error formats in their documentation and source; fallback behaviour in LiteLLM, OpenRouter, Portkey, Kong and Envoy AI Gateway documentation and source. Nothing was installed. Of the T-108 known gaps, the unclosed Redis client is closed in T-203, and a negative count from an HTTP adapter becomes `bad_response` (ADR-0010; a negative count from the mock or an injected provider still makes `settle` raise); gaps 2 to 5 are backlog items | `docs/DECISIONS.md`; the planning pull request |
