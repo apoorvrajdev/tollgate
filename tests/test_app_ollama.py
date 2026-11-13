@@ -231,6 +231,21 @@ def test_each_http_provider_gets_its_own_client_with_its_timeouts_and_base_url(
     ]
 
 
+def test_the_apps_client_does_not_follow_a_redirect(tmp_path: Path) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ollama.test":
+            return httpx.Response(302, headers={"location": "http://elsewhere.test/api/chat"})
+        return httpx.Response(200, json=OLLAMA_BODY)  # what a followed redirect would reach
+
+    upstream = Upstream(respond)
+    with TestClient(make_app(tmp_path, upstream)) as client:
+        response = post(client, "solo")
+    assert response.status_code == 502
+    assert [str(request.url) for request in upstream.requests] == [
+        "http://ollama.test:11434/api/chat"
+    ]
+
+
 def test_an_empty_base_url_is_treated_as_not_given_and_uses_the_default_host(
     tmp_path: Path,
 ) -> None:
