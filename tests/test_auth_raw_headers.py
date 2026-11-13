@@ -106,6 +106,25 @@ def test_the_header_name_is_matched_in_any_case() -> None:
     assert status_for("test-key", b"Bearer test-key", name=b"AUTHORIZATION") == 200
 
 
+def test_a_utf16_encoded_header_name_is_not_authorization() -> None:
+    name = "authorization".encode("utf-16-le")
+    assert status_for("test-key", b"Bearer test-key", name=name) == 401
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"Bearer test-key\xc2\xa0",
+        b"Bearerx test-key",
+        b"Bearer \ttest-key",
+        b"Bearer \t test-key",
+    ],
+    ids=["trailing NBSP", "scheme with extra letter", "space then tab", "space tab space"],
+)
+def test_whitespace_and_scheme_variants_that_reach_the_app_get_401(value: bytes) -> None:
+    assert status_for("test-key", value) == 401
+
+
 @pytest.mark.parametrize("name", [b"x-authorization", b"proxy-authorization", b"authorization-x"])
 def test_other_headers_are_not_treated_as_authorization(name: bytes) -> None:
     assert status_for("test-key", b"Bearer test-key", name=name) == 401

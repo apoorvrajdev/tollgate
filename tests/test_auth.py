@@ -88,6 +88,12 @@ def test_authenticator_keeps_digests_and_no_key_text() -> None:
     assert vars(authenticator)["_digests"] == (hashlib.sha256(SENTINEL.encode()).digest(),)
 
 
+def test_a_configured_key_is_matched_exactly_including_its_spaces() -> None:
+    # Settings trims keys before they reach the authenticator; the authenticator itself must not.
+    with pytest.raises(InvalidApiKeyError):
+        make_authenticator(" key").authenticate(["Bearer key"])
+
+
 def test_an_empty_configured_key_never_authenticates() -> None:
     with pytest.raises(InvalidApiKeyError):
         make_authenticator("").authenticate(["Bearer "])
