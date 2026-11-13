@@ -1,8 +1,8 @@
 # Architecture
 
 **Status:** Phase 1 in progress. The app serves `GET /health` and `POST /v1/chat/completions`, which answers
-from a mock provider, behind API key authentication (tasks T-000 to T-103); there is no rate limiting, routing
-or caching yet.
+from a mock provider, behind API key authentication and token-aware rate limiting (tasks T-000 to T-108);
+there is no routing or caching yet.
 Everything in sections 2 to 4 describes the target design, not current code.
 Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
@@ -104,7 +104,8 @@ deliberate.
 | `.venv/` | Local virtual environment | no |
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
-body and handler, API key authentication, the chat router) and `app/providers/` (the `Provider` protocol and
+body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
+`app/providers/` (the `Provider` protocol and
 `MockProvider`), `app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
 fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
@@ -114,6 +115,16 @@ API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass 
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
 without a key never sees a validation error, and the `require_api_key` dependency returns the caller identity
 and makes the OpenAPI document record the bearer scheme.
+
+`create_app()` also builds the `HeuristicEstimator` and the limiter chosen by `TOLLGATE_LIMITER_BACKEND`, on
+the injected clock, and keeps them on `app.state`: `InMemoryRateLimiter`, or `RedisRateLimiter` on an optional
+injected Redis client (tests pass fakeredis) or one built from `TOLLGATE_REDIS_URL`, kept on
+`app.state.redis_client`. The chat route reserves the estimate plus the completion allowance under the caller
+id, answers a refusal with 429, settles with the provider's `usage.total_tokens`, and refunds the whole
+reservation when the provider raises (502). Only the provider call is guarded, so a limiter error is a 500,
+never a refund. The limit headers come from the `Decision` that `reserve` returned, so a 200 shows the
+balance after the reservation and a 502 the balance before the refund; the next request sees the settled
+balance.
 
 The Redis token bucket keeps one hash per API key at a prefix plus the SHA-256 digest of the key
 (default prefix `tollgate:bucket:`), so the key itself is never written to Redis. The hash holds
