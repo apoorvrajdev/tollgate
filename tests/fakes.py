@@ -79,6 +79,25 @@ class ScriptedProvider:
         )
 
 
+class FakeClient:
+    """A closable client that records each close in `log`, then raises `error` if one is set.
+
+    The close is logged before it raises, so a test sees that a failing close was attempted.
+    """
+
+    def __init__(self, name: str, *, log: list[str], error: Exception | None = None) -> None:
+        self.name = name
+        self.closes = 0
+        self._log = log
+        self._error = error
+
+    async def aclose(self) -> None:
+        self.closes += 1
+        self._log.append(self.name)
+        if self._error is not None:
+            raise self._error
+
+
 TEST_API_KEY = "test-key"
 AUTH_HEADERS = {"Authorization": f"Bearer {TEST_API_KEY}"}
 

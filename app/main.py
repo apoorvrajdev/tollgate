@@ -1,6 +1,7 @@
 import os
-from collections.abc import Mapping
-from typing import Any, Literal
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
+from typing import Any, Literal, NamedTuple, Protocol
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -30,6 +31,20 @@ from app.settings import (
 BUILT_PROVIDER_TYPES = ("mock",)
 
 
+class AsyncCloseable(Protocol):
+    """A client the app closes at shutdown: a Redis client, and later an httpx.AsyncClient."""
+
+    async def aclose(self) -> None: ...
+
+
+class LimiterBuild(NamedTuple):
+    """The limiter, the Redis client it uses (if any), and the clients this build created."""
+
+    limiter: RateLimiter
+    redis_client: Redis | None
+    built_clients: tuple[AsyncCloseable, ...]
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
 
@@ -41,6 +56,29 @@ class TollgateApp(FastAPI):
         return strip_validation_error_schemas(super().openapi())
 
 
+async def _close_all(clients: Sequence[AsyncCloseable]) -> None:
+    """Close every client, last built first. A close that raises does not stop the others.
+
+    The errors are raised together once all clients have been tried, so a failure is never hidden.
+    """
+    errors: list[Exception] = []
+    for client in reversed(clients):
+        try:
+            await client.aclose()
+        except Exception as error:
+            errors.append(error)
+    if errors:
+        raise ExceptionGroup("clients failed to close", errors)
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        await _close_all(application.state.owned_clients)
+
+
 def _check_redis_range(settings: Settings) -> None:
     """Turn the Redis limiter's range limit into a startup error that names the variable."""
     reason = f"must be at most {MAX_TOKENS:,} when the limiter backend is 'redis'"
@@ -50,26 +88,27 @@ def _check_redis_range(settings: Settings) -> None:
         raise SettingsError(CAPACITY_TOKENS_VAR, reason)
 
 
-def build_limiter(
-    settings: Settings, clock: Clock, redis_client: Redis | None
-) -> tuple[RateLimiter, Redis | None]:
+def build_limiter(settings: Settings, clock: Clock, redis_client: Redis | None) -> LimiterBuild:
     """The limiter chosen by `settings.limiter_backend`, and the Redis client it uses, if any.
 
     With the redis backend an injected client is used (tests pass a fakeredis client); otherwise
     one is built from the URL, which connects lazily. The memory backend ignores the client.
+    Only a client built here is in `built_clients`; the caller owns it and closes it at shutdown.
     """
     if settings.limiter_backend == "memory":
         limiter = InMemoryRateLimiter(clock, settings.tokens_per_minute, settings.capacity_tokens)
-        return limiter, None
+        return LimiterBuild(limiter, None, ())
     _check_redis_range(settings)
+    built: tuple[AsyncCloseable, ...] = ()
     if redis_client is None:
         if settings.redis_url is None:  # Settings guarantees a URL for this backend.
             raise SettingsError(REDIS_URL_VAR, "is required when the limiter backend is 'redis'")
         redis_client = Redis.from_url(settings.redis_url.get_secret_value())
+        built = (redis_client,)
     redis_limiter = RedisRateLimiter(
         redis_client, clock, settings.tokens_per_minute, settings.capacity_tokens
     )
-    return redis_limiter, redis_client
+    return LimiterBuild(redis_limiter, redis_client, built)
 
 
 def build_providers(table: RouteTable, clock: Clock) -> dict[str, Provider]:
@@ -101,8 +140,12 @@ def create_app(
     `provider` sets the registry entry named `mock`; `providers` then sets entries by name, so
     tests can supply several. An entry the route table does not name is never routed to. Neither
     skips the check for types not built yet.
+
+    A client the app builds is appended to `app.state.owned_clients`; the lifespan closes them at
+    shutdown, last built first. A client passed in is the caller's to close.
     """
-    application = TollgateApp(title="Tollgate")
+    application = TollgateApp(title="Tollgate", lifespan=_lifespan)
+    application.state.owned_clients = []
     resolved_settings = settings if settings is not None else Settings.from_env(os.environ)
     resolved_clock = clock if clock is not None else SystemClock()
     application.state.settings = resolved_settings
@@ -117,9 +160,10 @@ def create_app(
     application.state.router = TableRouter(resolved_settings.route_table)
     application.state.authenticator = ApiKeyAuthenticator(resolved_settings.api_keys)
     application.state.estimator = HeuristicEstimator()
-    application.state.limiter, application.state.redis_client = build_limiter(
-        resolved_settings, resolved_clock, redis_client
-    )
+    limiter_build = build_limiter(resolved_settings, resolved_clock, redis_client)
+    application.state.limiter = limiter_build.limiter
+    application.state.redis_client = limiter_build.redis_client
+    application.state.owned_clients.extend(limiter_build.built_clients)
     register_error_handlers(application)
     register_auth_error_handler(application)
     application.include_router(chat.router)
