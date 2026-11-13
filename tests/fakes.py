@@ -85,7 +85,7 @@ class FakeClient:
     The close is logged before it raises, so a test sees that a failing close was attempted.
     """
 
-    def __init__(self, name: str, *, log: list[str], error: Exception | None = None) -> None:
+    def __init__(self, name: str, *, log: list[str], error: BaseException | None = None) -> None:
         self.name = name
         self.closes = 0
         self._log = log
