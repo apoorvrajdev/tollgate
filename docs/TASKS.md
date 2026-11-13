@@ -703,15 +703,16 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Context:** `app/main.py`, `tests/test_app_wiring.py`, `tests/test_chat_rate_limits.py`.
 - **Depends on:** T-202.
 - **Deliverables:**
-  - An app lifespan in `create_app()` that, on shutdown, closes the clients the app built, in the reverse order
-    of building, and continues past a client whose close raises. The Redis client built with `from_url` is
-    registered; an injected client is not.
+  - A list of owned clients on `app.state`, which `create_app()` appends to whenever it builds a client
+    (T-204 appends its HTTP clients the same way), and an app lifespan that, on shutdown, closes every client in
+    that list in the reverse order of building and continues past a client whose close raises. The Redis client
+    built with `from_url` is appended; an injected client is not.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. With the redis backend and no injected client, the client built from the URL is closed when the app shuts
      down (the lifespan run through `TestClient` as a context manager), and no connection is opened.
   2. An injected Redis client is still open after shutdown.
-  3. With two registered clients, both are closed in reverse order, and a close that raises does not stop the
+  3. With two clients in the owned list, both are closed in reverse order, and a close that raises does not stop the
      other.
   4. The memory backend builds nothing and closes nothing.
 - **Verification:** `python scripts/check.py` green; mutation table (the lifespan never closes, the injected
@@ -736,7 +737,7 @@ number order. The rows below are in delivery order; the cards further down are l
   - `IdSource` and `UuidIdSource` move from `app/providers/mock.py` to `app/providers/ids.py`, so adapters do
     not import from the mock.
   - `create_app()` builds one `httpx.AsyncClient` per HTTP provider in the route table (base URL, default
-    `http://localhost:11434` for Ollama, and the ADR-0010 timeouts), registers each for shutdown (T-203), and
+    `http://localhost:11434` for Ollama, and the ADR-0010 timeouts), appends each to the owned list (T-203), and
     gains an `http_transport=` keyword used by every client it builds, so tests pass an `httpx.MockTransport`.
   - `app/providers/ollama.py`: `OllamaProvider(client, clock, id_source)` posting to `/api/chat` by the
     ADR-0010 rules. The registry builds the `ollama` type.
@@ -849,7 +850,6 @@ number order. The rows below are in delivery order; the cards further down are l
   - An OWNER-CHECK: the owner runs the gateway with an Ollama route against a local Ollama, and the Log records
     the date, the Ollama version, the model, the status, the usage and the limit headers seen. Runs against
     OpenAI or Anthropic are optional, with the owner's own keys, recorded the same way or marked "not run".
-  - The README and the ARCHITECTURE status line are updated in the gate close-out pull request, as for Phase 1.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. The example file loads in a test with placeholder environment values.
