@@ -5,6 +5,7 @@ description = "Token-aware rate limiting, model routing and semantic caching for
 requires-python = "==3.13.*"
 dependencies = [
     "fastapi>=0.162.2",
+    "httpx>=0.28.1",
     "pydantic>=2.14.3",
     "redis>=8.1.0",
     "uvicorn>=0.54.0",
@@ -13,7 +14,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "fakeredis[lua]>=2.40.0",
-    "httpx>=0.28.1",
     "mypy>=2.4.1",
     "pytest>=9.2.0",
     "ruff>=0.17.4",

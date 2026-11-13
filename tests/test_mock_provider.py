@@ -3,7 +3,8 @@ import asyncio
 import pytest
 
 from app.api.models import ChatRequest, ChatResponse
-from app.providers.mock import REPLY_PREFIX, MockProvider, UuidIdSource, count_words
+from app.providers.ids import UuidIdSource
+from app.providers.mock import REPLY_PREFIX, MockProvider, count_words
 from tests.fakes import FakeClock, FixedIdSource
 
 

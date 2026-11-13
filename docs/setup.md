@@ -90,11 +90,15 @@ rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 
 The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully
 checked when the settings are read, so a broken file stops the gateway at startup. Each request is routed by
-its `model` and falls back to the next target on a retryable provider failure. Only the `mock` type is built
-until the adapter tasks (T-204 to T-206): a file naming `ollama`, `openai` or `anthropic` stops the gateway at
+its `model` and falls back to the next target on a retryable provider failure. The `mock` and `ollama` types
+are built; until the adapter tasks (T-205 and T-206) a file naming `openai` or `anthropic` stops the gateway at
 startup with `TOLLGATE_ROUTES_FILE: providers.<name>.type: is not built yet` (checked after the file and
 its `api_key_env` variables, so a missing key is reported first), and the example below starts only once
-those adapters exist.
+those adapters exist. An `ollama` provider talks to `base_url` (default `http://localhost:11434`) through
+Ollama's native `POST /api/chat`; `timeout_seconds` applies to each read, write and pool wait, and connecting
+always waits at most 5 seconds. The gateway checks nothing about `base_url` at startup (an empty one counts as not given): a
+malformed one fails when the first request uses it. Credentials in `base_url` are sent as HTTP Basic
+authentication and are not treated as secrets by the gateway.
 
 ```json
 {
@@ -188,9 +192,9 @@ Review the resulting diff before committing it.
 
 Pins are exact and updated by hand, one task at a time. Use throwaway venvs, not the project one:
 
-1. In a new venv, install the runtime packages (`fastapi`, `pydantic`, `uvicorn`, `redis`) with
+1. In a new venv, install the runtime packages (`fastapi`, `pydantic`, `uvicorn`, `redis`, `httpx`) with
    `--only-binary=:all:`, run `pip freeze`, and write the result to `requirements.txt` under its comment lines.
-2. In a second new venv, install the new `requirements.txt`, then `httpx`, `pytest`, `ruff`, `mypy` and
+2. In a second new venv, install the new `requirements.txt`, then `pytest`, `ruff`, `mypy` and
    `fakeredis[lua]`, run `pip freeze`, and put every line that is not in the runtime freeze into
    `requirements-dev.txt`, after `-r requirements.txt`.
 3. If a dev tool forces a different version of a runtime package, regenerate the runtime pins at that version so

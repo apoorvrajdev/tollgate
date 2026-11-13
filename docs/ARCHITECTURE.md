@@ -135,13 +135,14 @@ and makes the OpenAPI document record the bearer scheme.
 `create_app()` also builds the `HeuristicEstimator` and the limiter chosen by `TOLLGATE_LIMITER_BACKEND`, on
 the injected clock, and keeps them on `app.state`: `InMemoryRateLimiter`, or `RedisRateLimiter` on an optional
 injected Redis client (tests pass fakeredis) or one built from `TOLLGATE_REDIS_URL`, kept on
-`app.state.redis_client`. Every client `create_app()` builds (so far only the Redis client built from the URL;
-an injected client is the caller's) is appended to `app.state.owned_clients`, and the app lifespan closes the
+`app.state.redis_client`. Every client `create_app()` builds (one `httpx.AsyncClient` per HTTP provider of the route table, then the Redis
+client built from the URL; an injected client is the caller's) is appended to `app.state.owned_clients`, and the app lifespan closes the
 list at shutdown, last built first. A close that raises does not stop the others; once all have been tried the
-errors are raised together as an `ExceptionGroup`, so a failure is never hidden. The adapter tasks append their
-HTTP clients the same way. It also builds the provider registry (provider name to `Provider`, one
-`MockProvider` on the injected clock per `mock` entry of the route table; any type not built yet stops
-startup with a `SettingsError` on `TOLLGATE_ROUTES_FILE`) and a `TableRouter` on the route table, kept on
+errors are raised together as an `ExceptionGroup`, so a failure is never hidden. It also builds the provider
+registry (provider name to `Provider`: a `MockProvider` per `mock` entry and an `OllamaProvider` per `ollama`
+entry, each on the injected clock, the Ollama ones on their own client with the ADR-0010 timeouts and the
+`http_transport=` keyword's transport, which tests set to an `httpx.MockTransport`; any type not built yet
+stops startup with a `SettingsError` on `TOLLGATE_ROUTES_FILE`) and a `TableRouter` on the route table, kept on
 `app.state.providers` and `app.state.router`. The `provider=` keyword sets the entry named `mock` and
 `providers=` then sets entries by name; an entry the route table does not name is never routed to. The chat route reads the registry, the router and the
 limiter from `app.state` on every request. It selects the route first, answering a model that no route
