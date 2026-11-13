@@ -13,11 +13,11 @@ Accepted decisions change only through a new ADR.
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
 | [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
-| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted | 2026-11-12 |
-| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009 | 2026-11-12 |
+| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 | 2026-11-12 |
+| [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
-| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Proposed | 2026-11-13 |
-| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Proposed | 2026-11-13 |
+| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted | 2026-11-13 |
+| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
 
 ---
 
@@ -168,7 +168,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0007
 
-**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted · 2026-11-12
+**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted - amended by ADR-0010 ·
+2026-11-12
 
 - **Context:** The limit is in tokens per API key, but the true cost of a request is known only after the
   provider answers. OpenAI says it counts the maximum of `max_tokens` and an estimate "based on the character
@@ -208,7 +209,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0008
 
-**HTTP contract for authentication, limit headers and errors** · Accepted - amended by ADR-0009 · 2026-11-12
+**HTTP contract for authentication, limit headers and errors** · Accepted - amended by ADR-0009, ADR-0010 and
+ADR-0011 · 2026-11-12
 
 - **Context:** ADR-0004 makes the API OpenAI-compatible, and the official OpenAI Python SDK is the reference
   client. Checked on 2026-11-12:
@@ -305,7 +307,7 @@ Accepted decisions change only through a new ADR.
 ## ADR-0010
 
 **Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008)** ·
-Proposed · 2026-11-13
+Accepted · 2026-11-13
 
 - **Context:** ADR-0004 adds providers in a fixed order (mock, Ollama, OpenAI, Anthropic) and allows only the
   mock or recorded fakes in tests. ADR-0007 said `tiktoken` would be reconsidered when the first real adapter
@@ -412,12 +414,12 @@ Proposed · 2026-11-13
   - Starlette's TestClient keeps warning that it prefers `httpx2`. Switching is a separate decision.
   - A provider that is not an HTTP adapter (the mock, or one injected in tests) is not checked by these rules,
     so a negative count from it still makes `settle` raise.
-  - When this ADR is accepted, ADR-0007's status becomes "Accepted - amended by ADR-0010", and ADR-0008's gains
-    ADR-0010 (its 502 no longer always refunds).
+  - ADR-0007's status is "Accepted - amended by ADR-0010", and ADR-0008's names ADR-0010 among the ADRs that
+    amend it (its 502 no longer always refunds). Accepted by the owner as written on 2026-11-13.
 
 ## ADR-0011
 
-**Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008)** · Proposed ·
+**Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008)** · Accepted ·
 2026-11-13
 
 - **Context:** The router picks a provider and model for each request (ARCHITECTURE section 2). Prior art,
@@ -488,8 +490,8 @@ Proposed · 2026-11-13
   - A 502 does not tell the client which upstream failed or why.
   - The contract gains the 404 and two response headers. `Router` and `Route` become final interfaces in
     ARCHITECTURE section 3.
-  - When this ADR is accepted, ADR-0008's status becomes "Accepted - amended by ADR-0009, ADR-0010 and
-    ADR-0011".
+  - ADR-0008's status is "Accepted - amended by ADR-0009, ADR-0010 and ADR-0011". Accepted by the owner as
+    written on 2026-11-13.
 
 ---
 
