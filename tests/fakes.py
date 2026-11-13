@@ -28,8 +28,12 @@ class FixedIdSource:
         return self._response_id
 
 
+TEST_API_KEY = "test-key"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_API_KEY}"}
+
+
 def make_settings(**overrides: str) -> Settings:
     """Settings built from an explicit mapping, so tests never depend on the process environment."""
-    environ = {"TOLLGATE_API_KEYS": "test-key", "TOLLGATE_TOKENS_PER_MINUTE": "1000"}
+    environ = {"TOLLGATE_API_KEYS": TEST_API_KEY, "TOLLGATE_TOKENS_PER_MINUTE": "1000"}
     environ.update(overrides)
     return Settings.from_env(environ)

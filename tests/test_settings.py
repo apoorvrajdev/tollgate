@@ -5,7 +5,7 @@ import pytest
 from app.settings import Settings, SettingsError
 from tests.fakes import make_settings
 
-SENTINEL = "sk-sentinel-7f3a9c"
+SENTINEL = "SENTINEL-value-7f3a9c"
 REDIS_PASSWORD = "redis-pw-sentinel-1b2c"
 VALID = {"TOLLGATE_API_KEYS": "k1", "TOLLGATE_TOKENS_PER_MINUTE": "60"}
 

@@ -13,13 +13,35 @@ def document() -> dict[str, Any]:
     return create_app(make_settings(), FakeClock()).openapi()
 
 
-def test_route_documents_exactly_the_200_and_400_responses() -> None:
+def test_route_documents_exactly_the_200_400_and_401_responses() -> None:
     responses = document()["paths"][ROUTE]["post"]["responses"]
-    assert set(responses) == {"200", "400"}
+    assert set(responses) == {"200", "400", "401"}
     ok = responses["200"]["content"]["application/json"]["schema"]
     bad = responses["400"]["content"]["application/json"]["schema"]
+    unauthorized = responses["401"]["content"]["application/json"]["schema"]
     assert ok == {"$ref": "#/components/schemas/ChatResponse"}
     assert bad == {"$ref": "#/components/schemas/ErrorResponse"}
+    assert unauthorized == {"$ref": "#/components/schemas/ErrorResponse"}
+
+
+def test_401_documents_the_www_authenticate_challenge_header() -> None:
+    headers = document()["paths"][ROUTE]["post"]["responses"]["401"]["headers"]
+    assert set(headers) == {"WWW-Authenticate"}
+    assert headers["WWW-Authenticate"]["schema"] == {"type": "string"}
+
+
+def test_document_records_the_bearer_scheme_and_the_route_requires_it() -> None:
+    doc = document()
+    schemes = doc["components"]["securitySchemes"]
+    assert set(schemes) == {"ApiKeyAuth"}
+    assert (schemes["ApiKeyAuth"]["type"], schemes["ApiKeyAuth"]["scheme"]) == ("http", "bearer")
+    assert doc["paths"][ROUTE]["post"]["security"] == [{"ApiKeyAuth": []}]
+
+
+def test_health_and_the_document_as_a_whole_declare_no_security_requirement() -> None:
+    doc = document()
+    assert "security" not in doc["paths"]["/health"]["get"]
+    assert "security" not in doc
 
 
 def test_route_accepts_only_post() -> None:
