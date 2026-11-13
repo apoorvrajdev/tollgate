@@ -148,6 +148,17 @@ def leaves(error: BaseException) -> list[BaseException]:
     return [error]
 
 
+class ForbiddenRedis:
+    """Stands in for `Redis` in app.main: building a client either way is a test failure."""
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "ForbiddenRedis":
+        raise AssertionError("a Redis client was built")
+
+    @classmethod
+    def from_url(cls, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("a Redis client was built from a URL")
+
+
 class SpyRedis(fakeredis.FakeAsyncRedis):
     """A Redis client that counts the calls to aclose."""
 
@@ -181,8 +192,11 @@ def test_redis_client_built_from_the_url_is_closed_at_shutdown_and_opens_no_conn
     assert closed == [client]
 
 
-def test_injected_redis_client_is_not_registered_or_closed() -> None:
+def test_injected_redis_client_is_not_registered_or_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = SpyRedis()
+    monkeypatch.setattr(app.main, "Redis", ForbiddenRedis)
     application = create_app(make_settings(**REDIS_BACKEND), FakeClock(), redis_client=client)
     assert application.state.redis_client is client
     assert application.state.owned_clients == []
@@ -196,10 +210,7 @@ def test_injected_redis_client_is_not_registered_or_closed() -> None:
 def test_memory_backend_builds_nothing_and_closes_nothing(
     injected: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def refuse(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("the memory backend built a Redis client")
-
-    monkeypatch.setattr(Redis, "from_url", refuse)
+    monkeypatch.setattr(app.main, "Redis", ForbiddenRedis)
     client = SpyRedis() if injected else None
     application = create_app(make_settings(), FakeClock(), redis_client=client)
     assert application.state.owned_clients == []
