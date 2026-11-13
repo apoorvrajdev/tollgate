@@ -1,7 +1,8 @@
 # Architecture
 
-**Status:** Phase 0 - foundation. Only a FastAPI app with `GET /health` exists (task T-000). Everything in
-sections 2 to 4 describes the target design, not current code.
+**Status:** Phase 1 in progress. The app serves `GET /health` and `POST /v1/chat/completions`, which answers
+from a mock provider (tasks T-000 to T-102); there is no authentication, rate limiting, routing or caching yet.
+Everything in sections 2 to 4 describes the target design, not current code.
 Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
 ## 1. Overview
@@ -85,7 +86,11 @@ deliberate.
 | `.github/workflows/` | CI | yes |
 | `.venv/` | Local virtual environment | no |
 
-Package layout inside `app/` (`api/`, `providers/`, `limits/`, `routing/`, `cache/`) is decided per phase.
+Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
+body and handler, the chat router) and `app/providers/` (the `Provider` protocol and `MockProvider`), plus
+`clock.py`, `settings.py` and `main.py`. Planned: `limits/`, `routing/`, `cache/`. The OpenAPI document omits
+FastAPI's automatic 422, because the API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI`
+subclass that strips it.
 
 ## 6. Conventions
 

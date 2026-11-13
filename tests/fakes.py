@@ -18,6 +18,16 @@ class FakeClock:
         self._now_seconds += seconds
 
 
+class FixedIdSource:
+    """An id source that always returns the same id, so responses are identical across calls."""
+
+    def __init__(self, response_id: str = "chatcmpl-test") -> None:
+        self._response_id = response_id
+
+    def next_id(self) -> str:
+        return self._response_id
+
+
 def make_settings(**overrides: str) -> Settings:
     """Settings built from an explicit mapping, so tests never depend on the process environment."""
     environ = {"TOLLGATE_API_KEYS": "test-key", "TOLLGATE_TOKENS_PER_MINUTE": "1000"}
