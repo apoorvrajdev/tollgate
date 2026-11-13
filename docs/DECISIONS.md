@@ -298,7 +298,7 @@ Accepted decisions change only through a new ADR.
     OpenAPI snapshot only as plain strings, so a later change needs no schema change but does need a new ADR.
   - Silently ignored parameters can surprise a client that expects `stop` to work. Rejecting them is a
     separate decision for when the first real provider adapter arrives.
-  - If this ADR is accepted, ADR-0008's status becomes "Accepted - amended by ADR-0009".
+  - ADR-0008's status is "Accepted - amended by ADR-0009".
 
 ---
 
