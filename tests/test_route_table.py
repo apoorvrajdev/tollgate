@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.routing.config import (
@@ -16,7 +17,7 @@ from app.routing.config import (
     TargetConfig,
 )
 from app.settings import Settings, SettingsError
-from tests.fakes import make_settings
+from tests.fakes import AUTH_HEADERS, FakeClock, make_settings
 
 VAR = "TOLLGATE_ROUTES_FILE"
 VALUE = "SENTINEL-val-4e1d"
@@ -663,3 +664,141 @@ def test_create_app_stops_at_startup_on_a_bad_route_table(
 )
 def test_valid_variants_load(tmp_path: Path, data: Any) -> None:
     Settings.from_env(env(write_json(tmp_path, data), CLOUD_KEY="test-key-value"))
+
+
+# Provider names must be sendable as the x-tollgate-provider header (T-203).
+
+NAME_REASON = "has a provider name that is not made only of visible ASCII characters (! to ~)"
+NAME_SENTINEL = "SENTINEL-name-5d2a"
+EVERY_VISIBLE_ASCII = "".join(chr(code) for code in range(0x21, 0x7F))
+CHAT_URL = "/v1/chat/completions"
+
+
+def mock_providers(*names: str) -> dict[str, Any]:
+    return {name: {"type": "mock"} for name in names}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(" ", id="space"),
+        pytest.param("\x00", id="nul"),
+        pytest.param("\x01", id="control-1"),
+        pytest.param("\t", id="tab"),
+        pytest.param("\n", id="lf"),
+        pytest.param("\r", id="cr"),
+        pytest.param("\x1f", id="control-1f"),
+        pytest.param("\x7f", id="delete"),
+        pytest.param("\x80", id="c1-control"),
+        pytest.param("\xa0", id="no-break-space"),
+        pytest.param("\xe9", id="accented"),
+        pytest.param("\uff21", id="fullwidth-letter"),
+        pytest.param("\u2028", id="line-separator"),
+        pytest.param("\U0001f600", id="emoji"),
+    ],
+)
+def test_provider_name_with_an_unsendable_character_fails_without_naming_it(
+    tmp_path: Path, bad: str
+) -> None:
+    name = f"{NAME_SENTINEL}{bad}x"
+    data = table_file(providers=mock_providers(name), routes={})
+    error = error_for(env(write_json(tmp_path, data)))
+    assert error.variable == VAR
+    assert str(error) == f"{VAR}: providers: {NAME_REASON}"
+    assert_clean(error, NAME_SENTINEL)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [" ", "\x00", "\x7f", "\xe9", " ab", "a b", "ab ", "ab\n", "\nab", "ab\r", "\x7fab"],
+    ids=repr,
+)
+def test_a_bad_character_fails_in_any_position_and_as_the_only_character(
+    tmp_path: Path, name: str
+) -> None:
+    data = table_file(providers=mock_providers(name), routes={})
+    error = error_for(env(write_json(tmp_path, data)))
+    assert str(error) == f"{VAR}: providers: {NAME_REASON}"
+
+
+def test_every_provider_name_is_checked_not_only_the_first(tmp_path: Path) -> None:
+    data = table_file(providers=mock_providers("good", "bad name"), routes={})
+    assert str(error_for(env(write_json(tmp_path, data)))) == f"{VAR}: providers: {NAME_REASON}"
+
+
+def test_empty_provider_name_keeps_its_own_message_even_beside_a_bad_name(tmp_path: Path) -> None:
+    data = table_file(providers=mock_providers("", "bad name"), routes={})
+    error = error_for(env(write_json(tmp_path, data)))
+    assert str(error) == f"{VAR}: providers: has an empty provider name"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["!", "~", '"', "\\", "0", "a", "A", "a-b_c.d:e", "%41", EVERY_VISIBLE_ASCII],
+    ids=lambda name: "every-visible-ascii" if len(name) > 10 else name,
+)
+def test_provider_names_made_of_visible_ascii_load(tmp_path: Path, name: str) -> None:
+    data = table_file(providers=mock_providers(name), routes={"fast": [{"provider": name}]})
+    table = Settings.from_env(env(write_json(tmp_path, data))).route_table
+    assert list(table.providers) == [name]
+    assert table.routes["fast"][0].provider == name
+
+
+def test_every_visible_ascii_character_is_in_the_tested_range() -> None:
+    assert len(EVERY_VISIBLE_ASCII) == 94
+    assert EVERY_VISIBLE_ASCII[0] == "!"
+    assert EVERY_VISIBLE_ASCII[-1] == "~"
+
+
+def test_a_json_escaped_name_is_judged_after_decoding(tmp_path: Path) -> None:
+    def text_for(name_literal: str) -> str:
+        return f'{{"providers": {{"{name_literal}": {{"type": "mock"}}}}, "routes": {{}}}}'
+
+    # Raw strings: the file holds a backslash escape, which the JSON parser decodes.
+    table = Settings.from_env(env(write_text(tmp_path, text_for(r"\u0041bc")))).route_table
+    assert list(table.providers) == ["Abc"]
+    for literal in (r"a\u0020b", r"\u007f", r"a\u00e9", r"a\ud800", r"a\u000ab"):
+        error = error_for(env(write_text(tmp_path, text_for(literal))))
+        assert str(error) == f"{VAR}: providers: {NAME_REASON}"
+
+
+def test_aliases_are_not_restricted_to_visible_ascii(tmp_path: Path) -> None:
+    data = table_file(routes={"fast model \xe9": [{"provider": "m"}]})
+    table = Settings.from_env(env(write_json(tmp_path, data))).route_table
+    assert list(table.routes) == ["fast model \xe9"]
+
+
+def test_create_app_stops_at_startup_on_a_bad_provider_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = table_file(providers=mock_providers("bad name"), routes={})
+    for name, value in env(write_json(tmp_path, data)).items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SettingsError) as raised:
+        create_app()
+    assert str(raised.value) == f"{VAR}: providers: {NAME_REASON}"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [EVERY_VISIBLE_ASCII, "!", "~", "Mixed-Case_Name%41"],
+    ids=["every-visible-ascii", "lowest", "highest", "mixed-case"],
+)
+def test_a_provider_name_is_served_unchanged_in_the_provider_header(
+    tmp_path: Path, name: str
+) -> None:
+    data = table_file(providers=mock_providers(name), routes={"fast": [{"provider": name}]})
+    settings = Settings.from_env(
+        env(
+            write_json(tmp_path, data),
+            TOLLGATE_API_KEYS=AUTH_HEADERS["Authorization"].removeprefix("Bearer "),
+            TOLLGATE_TOKENS_PER_MINUTE="600",
+            TOLLGATE_CAPACITY_TOKENS="1000",
+        )
+    )
+    body = {"model": "fast", "messages": [{"role": "user", "content": "hello there world"}]}
+    with TestClient(create_app(settings, FakeClock())) as client:
+        response = client.post(CHAT_URL, json=body, headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    assert (b"x-tollgate-provider", name.encode("ascii")) in response.headers.raw
+    assert response.headers["x-tollgate-fallbacks"] == "0"

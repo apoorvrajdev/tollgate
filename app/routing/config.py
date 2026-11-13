@@ -23,6 +23,10 @@ MIN_TIMEOUT_SECONDS = 5
 MAX_TIMEOUT_SECONDS = 600
 DEFAULT_TIMEOUT_SECONDS = 60
 PROVIDER_TYPES = ("mock", "ollama", "openai", "anthropic")
+# A provider name is sent back as the x-tollgate-provider header, so it is limited to the visible
+# ASCII characters (no space, control, CR, LF or non-ASCII character), which a header can carry.
+PROVIDER_NAME_FIRST_CHAR = "!"
+PROVIDER_NAME_LAST_CHAR = "~"
 # A key pasted into api_key_env by mistake does not match (keys contain '-'), so it is rejected with
 # a fixed reason and never printed (owner clarification, T-201).
 ENV_VAR_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
@@ -252,11 +256,19 @@ def _read_text(raw_path: str) -> str:
     return text
 
 
+def _is_visible_ascii(name: str) -> bool:
+    return all(PROVIDER_NAME_FIRST_CHAR <= char <= PROVIDER_NAME_LAST_CHAR for char in name)
+
+
 def _check_names(table: RouteTableFile) -> None:
     # An empty alias can never match a request (its model has at least one character), and an
     # empty provider name is legal JSON but only confuses (owner decision, T-201).
     if "" in table.providers:
         raise _file_error(["providers"], "has an empty provider name")
+    # The name is the value that cannot be printed safely, so the reason never shows it (T-203).
+    if not all(_is_visible_ascii(name) for name in table.providers):
+        reason = "has a provider name that is not made only of visible ASCII characters (! to ~)"
+        raise _file_error(["providers"], reason)
     if "" in table.routes:
         raise _file_error(["routes"], "has an empty alias")
 
