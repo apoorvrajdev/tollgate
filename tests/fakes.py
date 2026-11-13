@@ -1,5 +1,6 @@
 """Test doubles shared across tests."""
 
+from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.settings import Settings
 
 
@@ -26,6 +27,56 @@ class FixedIdSource:
 
     def next_id(self) -> str:
         return self._response_id
+
+
+class ScriptedProvider:
+    """A provider that records each request, then raises `error` or answers with fixed values.
+
+    It reports `reported_model`, never the model it was sent, so a test can tell the two apart.
+    Every call appends `name` to `log`, which several providers can share to record call order.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        error: Exception | None = None,
+        reported_model: str = "reported",
+        prompt_tokens: int = 20,
+        completion_tokens: int = 17,
+        log: list[str] | None = None,
+    ) -> None:
+        self.name = name
+        self.requests: list[ChatRequest] = []
+        self._error = error
+        self._reported_model = reported_model
+        self._prompt_tokens = prompt_tokens
+        self._completion_tokens = completion_tokens
+        self._log = log if log is not None else []
+
+    async def complete(self, request: ChatRequest) -> ChatResponse:
+        self.requests.append(request)
+        self._log.append(self.name)
+        if self._error is not None:
+            raise self._error
+        return ChatResponse(
+            id=f"chatcmpl-{self.name}",
+            object="chat.completion",
+            created=0,
+            model=self._reported_model,
+            choices=[
+                Choice(
+                    index=0,
+                    message=ResponseMessage(role="assistant", content=f"reply from {self.name}"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=self._prompt_tokens,
+                completion_tokens=self._completion_tokens,
+                total_tokens=self._prompt_tokens + self._completion_tokens,
+            ),
+        )
 
 
 TEST_API_KEY = "test-key"
