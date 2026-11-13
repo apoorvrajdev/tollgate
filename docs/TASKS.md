@@ -62,7 +62,7 @@ cards further down are listed by ID.
 | T-102 | Chat completions endpoint with a mock provider | 1 | done | T-101; ADR-0008 accepted 2026-11-12 |
 | T-103 | API key authentication | 1 | done | T-101, T-102; ADR-0008 accepted 2026-11-12 |
 | T-104 | Token estimator | 1 | done | T-102; ADR-0007 accepted 2026-11-12 |
-| T-105 | In-memory token bucket and the shared behaviour suite | 1 | todo | T-101; ADR-0007 accepted 2026-11-12 |
+| T-105 | In-memory token bucket and the shared behaviour suite | 1 | done | T-101; ADR-0007 accepted 2026-11-12 |
 | T-106 | Redis token bucket, unit-tested against fakeredis | 1 | todo | T-105; ADR-0006 accepted 2026-11-12 |
 | T-107 | Real Redis in CI | 1 | todo | T-106 |
 | T-108 | Rate limiting on chat completions | 1 | todo | T-103, T-104, T-105, T-106 |
@@ -347,7 +347,7 @@ cards further down are listed by ID.
 
 ### T-105 - In-memory token bucket and the shared behaviour suite
 
-- **Status:** todo
+- **Status:** done
 - **Goal:** a correct reference limiter, and one behaviour suite that every later limiter must also pass.
 - **Context:** ADR-0007, ARCHITECTURE §3 (`RateLimiter`), `app/clock.py`, `tests/fakes.py`.
 - **Depends on:** T-101; ADR-0007 accepted.
@@ -394,6 +394,48 @@ cards further down are listed by ID.
     values.
   - `tests/limits/test_redis_limiter.py`: the shared suite on `fakeredis.FakeAsyncRedis`, plus checks of the
     key names and the TTL (`PTTL`).
+- **Carried over from T-105 (the in-memory limiter is the reference; the Redis one must agree):**
+  - **A clock that steps backwards.** `SystemClock` can step back (a time correction). The in-memory
+    limiter clamps the elapsed time to 0 and never moves its timestamp backwards, so it never refills the
+    same interval twice and never over-grants. The Lua script must do the same: `elapsed = max(0, now -
+    updated)` and `updated = max(updated, now)`. The shared suite cannot test this, because `FakeClock`
+    cannot go backwards, so this task adds its own test for it.
+  - **Exact arithmetic.** The shared suite needs exact results over many calls, not only within one call:
+    100 tokens per minute refills 5/3 per second, 11 per minute must give a wait of exactly 60 seconds,
+    and 120 one-second steps at 1 per minute must leave exactly 2 tokens
+    (`case_many_small_refills_add_up_exactly`). Multiplying first and dividing last fixes a single call,
+    but a balance stored as a double and refilled on every call drifts. The proposed fix is to keep the
+    balance in the script as an integer scaled by 60000 (tokens x 60000): the refill is then exactly
+    `elapsed_ms * tokens_per_minute`, the capacity is `capacity_tokens * 60000`, and a reservation is
+    compared with `amount * 60000`. If a different representation is chosen, any change to the suite must
+    be explicit and reviewed and must not loosen an assertion. Four things must be settled when this task
+    is planned, because the proposal does not cover them:
+    - **Range.** Lua numbers are doubles, exact for integers up to 2^53 (9,007,199,254,740,992), so the
+      scaled capacity is exact only while `capacity_tokens` is at most 150,119,987,579 (2^53 // 60000). The
+      in-memory limiter (exact fractions) has no such bound, and `app/settings.py` accepts integers of up to
+      18 digits, so decide whether `RedisRateLimiter.__init__` rejects a larger capacity with a
+      `ValueError`, Settings refuses it, or the script uses another representation. A charge from a
+      provider that reports usage near that size is scaled too.
+    - **Number formatting and division.** Lua 5.1 prints large doubles in exponent form (`1e+15`), so format
+      the returned balance with `string.format("%.0f", x)`; the adapter's `int()` would reject `1e+15`. Lua
+      5.1 has no integer division, so compute the ceilings for the wait and the reset with `math.floor`
+      and `math.fmod` (or a remainder check), not a bare float division.
+    - **Seconds to milliseconds.** The script takes the time in whole milliseconds, while the in-memory
+      reference works in exact seconds, so the adapter must state how it rounds `now_seconds()` (for
+      example `floor(seconds * 1000)`). The shared suite moves the clock in 0.25 second steps and cannot
+      see a sub-millisecond difference; this task adds its own test for the rounding.
+    - **ADR-0006 says the script returns "the fractional balance as a string"**; the integer-scaled balance
+      above is different. Reconcile it in the plan: either keep the fraction, or record the change in a new
+      ADR (an accepted ADR changes only through a new one).
+  - **Negative amounts.** The suite requires `ValueError` for a negative `reserve` or `settle` amount, with
+    the word "negative" in the message, so the adapter must raise it before calling the script.
+  - **One event loop per case.** Each suite case is one `asyncio.run` and the factory is called inside it;
+    create the `FakeAsyncRedis` inside the factory, not at import time. Pass a `cleanup` coroutine
+    function to `run_behaviour_case` to close the client after each case.
+  - **A fresh keyspace per factory call.** Several cases build two limiters with different rates and use the
+    same key on each, and `case_two_limiters_from_the_factory_do_not_share_state` checks it. The factory
+    must give every limiter its own key prefix (a counter or a UUID), because two `FakeAsyncRedis()`
+    instances can share one server.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. Both requirements files install with `--only-binary=:all:` on Windows and in CI.
@@ -418,6 +460,9 @@ cards further down are listed by ID.
 - **Context:** ADR-0006, `.github/workflows/ci.yml`, `pyproject.toml`, `scripts/check.py`,
   `tests/limits/behaviour.py`.
 - **Depends on:** T-106.
+- **Carried over from T-105:** the real-server factory must give each limiter its own key prefix (not only
+  each test), because the shared suite builds several limiters per case and uses the same key on each, and
+  it should pass a `cleanup` to `run_behaviour_case` that closes the client (see the T-106 card).
 - **Deliverables:**
   - `pyproject.toml`: the `redis_server` marker registered, and `-m "not redis_server"` in the default pytest
     options, so the tests are deselected (not skipped) in `check.py` and local runs.
@@ -455,6 +500,17 @@ cards further down are listed by ID.
   - `app/api/limit_headers.py`: builds the three `x-ratelimit-*-tokens` headers and `Retry-After` from a
     `Decision`, including the `<m>m<s>s` duration format.
   - The 429 and 502 responses and the headers in the OpenAPI document.
+- **Needs clarifying before this task is planned (found in T-105):** the limit headers come from the
+  `Decision` that `reserve` returns, so on a 200 they show the balance after the reservation, which was made
+  from the estimate. `settle` returns nothing and runs after the provider answers, so a response cannot show
+  the balance after settling; only the next request's headers can. Criterion 2 below ("after a 200, the
+  remaining balance reflects the mock's reported usage") is therefore true of a later request or probe, not of
+  the 200's own headers. Decide before planning whether criterion 2 is tested through a follow-up request,
+  or `settle` should return a `Decision` (an interface change that needs an ADR and a change to T-105's
+  suite and to T-106). The same applies to a 502: ADR-0008 says it still carries the limit headers, but they
+  come from the `Decision` that `reserve` returned, so they show the balance before the refund; decide
+  whether that is accepted. Also, buckets are never evicted, so `reserve` and `settle` must only receive the
+  caller id of an authenticated key (T-103), never a value taken from the request.
 - **Contract:** changes (429, 502 and the headers); regenerated snapshot in its own commit.
 - **Acceptance criteria:**
   1. Under the limit: 200 with exact header values. Over it: 429 with the ADR-0008 body and `Retry-After`
@@ -545,3 +601,5 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-13 | T-103 | Fourth iteration, run at the owner's request after the limit. The six tests were added (trailing no-break space, UTF-16 header name, a scheme with an extra letter, a leading space-and-tab, a configured key matched exactly) and the `docs/setup.md` wording was fixed. `scripts/check.py` passed (14 contract and 434 other tests) and criteria 1 to 4 pass. All 80 mutations from the third round are resolved: 78 caught and 2 proven equivalent (header names decoded as latin-1, and `casefold` for `lower` on the scheme, checked over every code point). A further 20 adversarial mutations left five survivors that a test can kill: whitespace or a no-break space before the scheme or the key, an empty scheme, spaces removed from inside a key, and an authenticator with no keys. Tests for them are written but not added, and the owner decides. The task stays `blocked` until then | Verifier tables, iteration 4 |
 | 2026-11-13 | T-103 | Complete. At the owner's request the five remaining tests were added (whitespace or a no-break space before the scheme, an empty scheme, a key with an internal space, an authenticator with no keys) and the fake secret in `tests/test_settings.py` was renamed so it no longer looks like an API key (the old value began with the prefix that one provider's keys use); a literal scan of the repository for that prefix is now empty. `scripts/check.py` passed (14 contract and 444 other tests). In the last verification all five new survivors, the five from the previous round and 17 earlier mutations were caught, and four mutations of `app/settings.py` (keys or the Redis URL stored unmasked, a value in an error message, key text in `repr`) were still caught after the rename. A review of the test for the empty scheme found that its HTTP-level case did not contain an empty scheme; it was corrected. The owner decided that adversarial mutation stops here. Two mutations (header names decoded as latin-1, `casefold` for `lower` on the scheme) are equivalent. Known and accepted: `/openapi.json` and `/docs` need no key; each request hashes the key twice, to be merged when T-108 needs the identity | Verifier tables, iteration 4 and the final run |
 | 2026-11-13 | T-104 | `app/limits/estimate.py` added: the `TokenEstimator` protocol (`estimate_input_tokens(request)`), `HeuristicEstimator` (`ceil(characters / 4) + 3` per message, +1 for a `name`, +3 for the reply, integer arithmetic only) and `reserved_tokens(request, estimator)` (the estimate plus `max_completion_tokens`, else `max_tokens`, else 0). Characters are Python string length, so a non-BMP character counts once and a combining mark counts as its own character. A `name` counts whenever it is present, including an empty string. No cap is put on `max_tokens`, so an oversized reservation is left to the limiter (ADR-0007). `scripts/check.py` passed (14 contract and 479 other tests); no dependency was added and the contract is unchanged. Mutation check on scratch copies: 39 mutations (the card's five and 34 more), the first round caught 36 and left a whitespace gap (characters counted after `strip()`), closed by a test with whitespace content; the second round caught 37 of 39. The two survivors are equivalent for any request the API accepts, because both max fields are validated to be at least 1: `or` instead of `is not None` on the max fields differs only when `max_completion_tokens` is 0, and a truthiness test on `max_tokens` differs only when it is negative. One feedback iteration. Reviewer APPROVE with three Minor findings (a layout line re-wrapped, a comment on the protocol test, a name-shadowing note for T-105). The `ARCHITECTURE.md` interface section was not changed; T-105 adds the new entries there | Verifier tables, two rounds; `check.py` output |
+| 2026-11-13 | T-105 | `app/limits/limiter.py` (the `RateLimiter` protocol and a frozen `Decision` of plain integers) and `app/limits/memory.py` (`InMemoryRateLimiter`) added. Balances and times are exact fractions, so a reservation equal to the balance is allowed and a wait is rounded up from an exact value even at 5/3 tokens per second. The clock is read once per call, inside one `asyncio.Lock`; a clock that steps back gives no refill and never moves the timestamp back. The shared suite `tests/limits/behaviour.py` has 45 cases with hand-computed values, run through a limiter factory and a `FakeClock`, so T-106 and T-107 run the same cases; it documents that each factory call must return a limiter with its own keyspace and allows a `cleanup` coroutine. `scripts/check.py` passed (14 contract and 534 other tests); no dependency was added and the contract is unchanged. Mutation check on scratch copies: 64 mutations, the first round left a float-arithmetic mutant alive (all cases passed with floats) and an empty key sharing a bucket with `default`, both closed by new cases (a wait of exactly 60 seconds at 11 tokens per minute, 120 one-second steps at 1 per minute leaving exactly 2 tokens, and a lookalike key); the second round caught 60 of 64. The four survivors are equivalent (a refund above capacity and an oversized check against the balance cannot be observed because every call caps the balance first; a retry clamped to at least 1 and `int()` for `floor` agree for every reachable state), shown by comparing 40 random operation sequences byte for byte. The lock itself is covered only by a white-box test that records whether it is held when the clock is read, because with no `await` in the critical section asyncio never interleaves the tasks, so removing the lock changes no behaviour. One feedback iteration. Reviewer APPROVE with Minor findings (documentation of the 2^53 range, Lua number formatting and the seconds-to-milliseconds rule, now in the T-106 card). The `ARCHITECTURE.md` interface section now lists `TokenEstimator`, `reserved_tokens`, `Decision` and `RateLimiter` as final | Verifier tables, two rounds; `check.py` output |
+| 2026-11-13 | T-105 | Carried to later cards: T-106 gets the clock-steps-back rule, the exact-arithmetic proposal (an integer balance scaled by 60000, exact only for a capacity up to 150,119,987,579 tokens, so its range must be decided), Lua number formatting, the seconds-to-milliseconds rounding, a note that ADR-0006 says the script returns a fractional balance, negative amounts raising `ValueError` with "negative" in the message, and a fresh key prefix per factory call; T-107 gets the same prefix and cleanup notes; T-108 gets a note that a 200's limit headers come from the reserve `Decision` and so cannot show the balance after settling (its criterion 2 needs clarifying before it is planned), that a 502's headers show the balance before the refund, and that only authenticated caller ids may reach the limiter | `docs/TASKS.md` cards T-106, T-107 and T-108 |
