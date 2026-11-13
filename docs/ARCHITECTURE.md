@@ -89,12 +89,12 @@ deliberate.
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
 body and handler, API key authentication, the chat router) and `app/providers/` (the `Provider` protocol and
-`MockProvider`), plus `clock.py`, `settings.py` and `main.py`. Planned: `limits/`, `routing/`, `cache/`. The
-OpenAPI document omits FastAPI's automatic 422, because the API answers 400 (ADR-0008), so `create_app()`
-builds a small `FastAPI` subclass that strips it. Authentication has two parts: the chat router's
-`AuthenticatedRoute` checks the key before the body is read, so a caller without a key never sees a validation
-error, and the `require_api_key` dependency returns the caller identity and makes the OpenAPI document record
-the bearer scheme.
+`MockProvider`), `app/limits/` (the token estimator; the limiters come later), plus `clock.py`, `settings.py`
+and `main.py`. Planned: `routing/`, `cache/`. The OpenAPI document omits FastAPI's automatic 422, because the
+API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
+has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
+without a key never sees a validation error, and the `require_api_key` dependency returns the caller identity
+and makes the OpenAPI document record the bearer scheme.
 
 ## 6. Conventions
 
