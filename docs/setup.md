@@ -114,11 +114,11 @@ Review the resulting diff before committing it.
 
 Pins are exact and updated by hand, one task at a time. Use throwaway venvs, not the project one:
 
-1. In a new venv, install the runtime packages (`fastapi`, `pydantic`, `uvicorn`) with `--only-binary=:all:`, run
-   `pip freeze`, and write the result to `requirements.txt` under its two comment lines.
-2. In a second new venv, install the new `requirements.txt`, then `httpx`, `pytest`, `ruff` and `mypy`, run
-   `pip freeze`, and put every line that is not in the runtime freeze into `requirements-dev.txt`, after
-   `-r requirements.txt`.
+1. In a new venv, install the runtime packages (`fastapi`, `pydantic`, `uvicorn`, `redis`) with
+   `--only-binary=:all:`, run `pip freeze`, and write the result to `requirements.txt` under its comment lines.
+2. In a second new venv, install the new `requirements.txt`, then `httpx`, `pytest`, `ruff`, `mypy` and
+   `fakeredis[lua]`, run `pip freeze`, and put every line that is not in the runtime freeze into
+   `requirements-dev.txt`, after `-r requirements.txt`.
 3. If a dev tool forces a different version of a runtime package, regenerate the runtime pins at that version so
    both files agree. Run `pip check` in both venvs, then `python scripts/check.py`.
 
