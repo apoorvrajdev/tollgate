@@ -54,6 +54,20 @@ curl localhost:8000/health   # {"status":"ok"}
 
 Run it before every commit. To fix formatting, run `python -m ruff format .`.
 
+### Redis integration tests
+
+The shared limiter suite also runs against a real Redis server. Those tests carry the `redis_server` marker,
+which the default pytest options deselect, so `check.py` never touches the network. CI runs them in the
+`redis integration` step against a `redis:7.4.12` service container. To run them by hand, if you have a local
+Redis:
+
+```bash
+TOLLGATE_TEST_REDIS_URL=redis://localhost:6379/0 .venv/Scripts/python -m pytest -m redis_server
+```
+
+With the marker selected and the variable unset, the tests fail and name the variable; they never skip. Each
+limiter writes under its own `tollgate-test:<run id>:<n>:` prefix and the tests delete those keys afterwards.
+
 ## Configuration
 
 The gateway reads its settings from environment variables when the app is built, and refuses to start if one is
