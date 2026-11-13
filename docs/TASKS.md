@@ -99,7 +99,7 @@ number order. The rows below are in delivery order; the cards further down are l
 | T-203 | Close the clients the app builds on shutdown, and check provider names | 2 | done | T-202 |
 | T-204 | Ollama adapter | 2 | done | T-203 |
 | T-205 | OpenAI adapter | 2 | todo | T-204; the backlog item "Cap what `settle` charges" resolved |
-| T-206 | Anthropic adapter | 2 | todo | T-204 |
+| T-206 | Anthropic adapter | 2 | todo | T-204; the backlog item "Cap what `settle` charges" resolved |
 | T-207 | Real-provider guide and the owner's Ollama run | 2 | todo | T-204, T-205, T-206 |
 
 ---
@@ -831,7 +831,9 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Status:** todo
 - **Goal:** a route can be served by the Anthropic Messages API, tested only with `httpx.MockTransport`.
 - **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
-- **Depends on:** T-204.
+- **Depends on:** T-204, and the backlog item "Cap what `settle` charges (before T-205)" resolved: a
+  provider's reported usage must be bounded before `settle` (owner decision, T-204 review), so this task does not
+  start until that item is a task that is `done`, or the owner records that it is waived.
 - **Deliverables:**
   - `app/providers/anthropic.py`: `AnthropicProvider(client, api_key, default_max_tokens, clock, id_source)`
     posting to `/v1/messages` (default base URL `https://api.anthropic.com`) with `x-api-key`,
