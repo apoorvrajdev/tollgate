@@ -75,10 +75,13 @@ rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 
 `POST /v1/chat/completions` requires `Authorization: Bearer <key>`, where the key is one of
 `TOLLGATE_API_KEYS`. Every failure gets the same 401 (a missing header, a scheme other than `Bearer`, an empty
-or unknown key, or more than one `Authorization` header), with a `WWW-Authenticate: Bearer` header. The scheme
+or unknown key, or more than one `Authorization` header), with a `WWW-Authenticate: Bearer` header; a header
+value with a NUL, form feed or vertical tab byte never reaches the gateway, because uvicorn answers it with its
+own 400. The scheme
 name is case-insensitive, and extra spaces between the scheme and the key (or after it) are ignored. A tab
-between them, or other whitespace such as a non-breaking space, is not; a trailing tab is removed by the HTTP
-parser (h11, which uvicorn uses here) before the gateway sees the header. The check runs before the body is
+between them, or other whitespace such as a non-breaking space, is not; a tab at the start or end of the whole
+header value is removed by the HTTP parser (h11, which uvicorn uses here) before the gateway sees it. The
+check runs before the body is
 read, so an unauthenticated request never gets a validation error. The authenticator keeps only SHA-256
 digests of the keys, and the digest is the caller id used later for rate limits; the configured keys themselves
 stay in the settings as masked secrets. The digests are unsalted, so use long random keys. Header bytes are
