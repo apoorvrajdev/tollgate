@@ -1032,9 +1032,9 @@ cards further down are listed by ID.
     Anthropic's absent-or-null-is-0 cache count stay in their adapters, built on `whole_number`.
   - `app/providers/http_body.py`: `async def post_json(client, path, *, body, headers, max_response_bytes) ->
     JsonReply`, where `JsonReply` is a `NamedTuple` of `payload: object` and `status_code: int`. It makes one
-    `POST` of `body` as JSON through `client.stream`, reads the status first, maps a non-2xx to `rate_limited` (429) or
-    `upstream_status` without reading its body, reads a 2xx body with `read_capped`, and parses it as UTF-8
-    JSON. A timeout is checked before `httpx.TransportError`, then `httpx.DecodingError`; invalid UTF-8,
+    `POST` of `body` as JSON through `client.stream`, reads the status first, maps a non-2xx to `rate_limited`
+    (429) or `upstream_status` without reading its body, reads a 2xx body with `read_capped`, and parses it as
+    UTF-8 JSON. A timeout is checked before `httpx.TransportError`, then `httpx.DecodingError`; invalid UTF-8,
     invalid JSON, an empty body and deep nesting are `bad_response`. Every `ProviderError` is raised outside
     its `except` block. `headers` may be `None` (Ollama sends none).
   - The OpenAI and Anthropic adapters call `post_json` and the `fields` checks; their own `_text`,
@@ -1061,13 +1061,13 @@ cards further down are listed by ID.
      check raising with 200 fails, and has no `__context__`.
   4. `post_json`, tested directly through `httpx.MockTransport` (`tests/test_http_body.py`): the request is one
      `POST` to the path with exactly the JSON body and the given headers, and with `headers` set to `None`
-     it carries only httpx's default headers, the same set as a call that passes no headers; a 2xx returns the parsed payload with its status (200, 201 and 299); 429 is `rate_limited`, 500
-     and 529 are retryable `upstream_status`, 400 and 404 non-retryable, and none of their bodies is read (a
-     corrupt gzip body does not turn them into `bad_response`); a redirect is not followed; each timeout type
-     is `timeout` and other transport errors are `connection`; a corrupt gzip 2xx, invalid UTF-8, invalid
-     JSON, an empty body, deep nesting and a body above the limit are `bad_response` with the reply's status,
-     each tested on a 201 reply as well as a 200.
-     No error holds the body, the URL or a header value, and none has a `__context__`.
+     it carries only httpx's default headers, the same set as a call that passes no headers; a 2xx returns the
+     parsed payload with its status (200, 201 and 299); 429 is `rate_limited`, 500 and 529 are retryable
+     `upstream_status`, 400 and 404 non-retryable, and none of their bodies is read (a corrupt gzip body does
+     not turn them into `bad_response`); a redirect is not followed; each timeout type is `timeout` and other
+     transport errors are `connection`; a corrupt gzip 2xx, invalid UTF-8, invalid JSON, an empty body, deep
+     nesting and a body above the limit are `bad_response` with the reply's status, each tested on a 201 reply
+     as well as a 200. No error holds the body, the URL or a header value, and none has a `__context__`.
   5. Each adapter forwards the reply's status (`tests/test_adapter_wiring.py`, new): for each of the three
      adapters, a 201 reply that is valid JSON but cannot be translated (`{}`, and a valid reply with an
      unknown finish reason) is `bad_response` with status 201.
