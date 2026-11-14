@@ -264,6 +264,7 @@ def _read_text(raw_path: str) -> str:
     return text
 
 
+# Provider names and API keys share this check: both are sent in an HTTP header.
 def _is_visible_ascii(name: str) -> bool:
     return all(PROVIDER_NAME_FIRST_CHAR <= char <= PROVIDER_NAME_LAST_CHAR for char in name)
 
@@ -302,7 +303,17 @@ def _read_keys(table: RouteTableFile, environ: Mapping[str, str]) -> dict[str, S
             field = format_path(["providers", name, "api_key_env"])
             reason = f"is required by {ROUTES_FILE_VAR} {field} and must not be empty"
             raise RouteTableError(provider.api_key_env, reason)
-        keys[name] = SecretStr(value.strip())
+        key = value.strip()
+        # The key goes into an HTTP header, where a space, a control character or non-ASCII text
+        # fails on every request with an error that can hold the key; the reason never shows it.
+        if not _is_visible_ascii(key):
+            field = format_path(["providers", name, "api_key_env"])
+            reason = (
+                f"is required by {ROUTES_FILE_VAR} {field} and must be made only of visible ASCII"
+                " characters (! to ~)"
+            )
+            raise RouteTableError(provider.api_key_env, reason)
+        keys[name] = SecretStr(key)
     return keys
 
 
