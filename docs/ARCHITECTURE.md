@@ -120,7 +120,8 @@ deliberate.
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
 body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
 `app/providers/` (the `Provider` protocol, `MockProvider`, `ProviderError` with its failure kinds in
-`errors.py`, the Ollama adapter `OllamaProvider` in `ollama.py`, and `http_body.py`: `read_capped`, which reads
+`errors.py`, the Ollama adapter `OllamaProvider` in `ollama.py`, the OpenAI adapter `OpenAIProvider` in
+`openai.py`, and `http_body.py`: `read_capped`, which reads
 a 2xx body in decoded chunks up to the provider's `max_response_bytes`, ADR-0013), `app/routing/` (`config.py`:
 the route table file, validated when the settings are read, and the built-in table; `router.py`: `Route`,
 `Router`, `TableRouter` and `run_route`, the ordered fallback loop),
@@ -142,9 +143,11 @@ injected Redis client (tests pass fakeredis) or one built from `TOLLGATE_REDIS_U
 client built from the URL; an injected client is the caller's) is appended to `app.state.owned_clients`, and the app lifespan closes the
 list at shutdown, last built first. A close that raises does not stop the others; once all have been tried the
 errors are raised together as an `ExceptionGroup`, so a failure is never hidden. It also builds the provider
-registry (provider name to `Provider`: a `MockProvider` per `mock` entry and an `OllamaProvider` per `ollama`
-entry, each on the injected clock, the Ollama ones on their own client with the ADR-0010 timeouts, their
-`max_response_bytes` and the `http_transport=` keyword's transport, which tests set to an
+registry (provider name to `Provider`: a `MockProvider` per `mock` entry, an `OllamaProvider` per `ollama`
+entry, the mock and Ollama ones on the injected clock, and an `OpenAIProvider` per `openai` entry with the key
+read from its `api_key_env`; the HTTP ones each on their own client with the ADR-0010 timeouts, their
+provider's default base URL when `base_url` is absent or empty, their `max_response_bytes` and the
+`http_transport=` keyword's transport, which tests set to an
 `httpx.MockTransport`; any type not built yet
 stops startup with a `SettingsError` on `TOLLGATE_ROUTES_FILE`) and a `TableRouter` on the route table, kept on
 `app.state.providers` and `app.state.router`. The `provider=` keyword sets the entry named `mock` and

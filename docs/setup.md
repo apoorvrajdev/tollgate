@@ -90,15 +90,20 @@ rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 
 The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully
 checked when the settings are read, so a broken file stops the gateway at startup. Each request is routed by
-its `model` and falls back to the next target on a retryable provider failure. The `mock` and `ollama` types
-are built; until the adapter tasks (T-205 and T-206) a file naming `openai` or `anthropic` stops the gateway at
-startup with `TOLLGATE_ROUTES_FILE: providers.<name>.type: is not built yet` (checked after the file and
+its `model` and falls back to the next target on a retryable provider failure. The `mock`, `ollama` and
+`openai` types are built; until the Anthropic adapter task (T-206) a file naming `anthropic` stops the gateway
+at startup with `TOLLGATE_ROUTES_FILE: providers.<name>.type: is not built yet` (checked after the file and
 its `api_key_env` variables, so a missing key is reported first), and the example below starts only once
-those adapters exist. An `ollama` provider talks to `base_url` (default `http://localhost:11434`) through
+that adapter exists. An `ollama` provider talks to `base_url` (default `http://localhost:11434`) through
 Ollama's native `POST /api/chat`; `timeout_seconds` applies to each read, write and pool wait, and connecting
 always waits at most 5 seconds. The gateway checks nothing about `base_url` at startup (an empty one counts as not given): a
 malformed one fails when the first request uses it. Credentials in `base_url` are sent as HTTP Basic
-authentication and are not treated as secrets by the gateway.
+authentication and are not treated as secrets by the gateway. An `openai` provider posts to
+`<base_url>/v1/chat/completions` (default `base_url` `https://api.openai.com`), so `base_url` is the host
+without `/v1`: `https://api.openai.com/v1` would request `/v1/v1/chat/completions`, a path that does not
+exist; a 4xx answer is not retryable and does not fall back. Its key is sent only as `Authorization: Bearer <key>`. The client's `max_completion_tokens`,
+else `max_tokens`, is sent as `max_completion_tokens` (never `max_tokens`); `temperature` and each message's
+`name` are forwarded when given, and `user` is not. The upstream `id`, `created` and `model` are kept.
 
 ```json
 {
@@ -136,7 +141,9 @@ authentication and are not treated as secrets by the gateway.
   without `model`, the client's model is passed through.
 - Keys never go in the file. `api_key_env` is the name of the environment variable that holds the key (letters,
   digits and underscores, not starting with a digit). The variable must be set and not blank; surrounding
-  spaces are trimmed.
+  spaces are trimmed. The key is sent in an HTTP header, so what remains must be made only of visible ASCII
+  characters (`!` to `~`); a key with a space, a line break or a non-ASCII character inside it stops the
+  gateway at startup with an error that names the variable and never shows the key.
 - The file must be UTF-8 without a byte order mark (some editors, such as Windows Notepad, add one).
 - Errors name `TOLLGATE_ROUTES_FILE` and the field path, for example
   `TOLLGATE_ROUTES_FILE: routes.fast[0].provider: names an undefined provider`, or the key variable that is

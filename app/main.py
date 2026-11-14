@@ -19,12 +19,16 @@ from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
 from app.providers.base import Provider
 from app.providers.ids import UuidIdSource
 from app.providers.mock import MockProvider
-from app.providers.ollama import DEFAULT_BASE_URL, OllamaProvider
+from app.providers.ollama import DEFAULT_BASE_URL as OLLAMA_DEFAULT_BASE_URL
+from app.providers.ollama import OllamaProvider
+from app.providers.openai import DEFAULT_BASE_URL as OPENAI_DEFAULT_BASE_URL
+from app.providers.openai import OpenAIProvider
 from app.routing.config import (
     MIN_TIMEOUT_SECONDS,
     ROUTES_FILE_VAR,
     MockProviderConfig,
     OllamaProviderConfig,
+    OpenAIProviderConfig,
     RouteTable,
     format_path,
 )
@@ -37,9 +41,8 @@ from app.settings import (
     SettingsError,
 )
 
-# Provider types this build can serve. The OpenAI and Anthropic adapter tasks add theirs (T-205,
-# T-206).
-BUILT_PROVIDER_TYPES = ("mock", "ollama")
+# Provider types this build can serve. The Anthropic adapter task adds its type (T-206).
+BUILT_PROVIDER_TYPES = ("mock", "ollama", "openai")
 # The connect timeout is fixed; `timeout_seconds` covers reads, writes and the pool (ADR-0010).
 CONNECT_TIMEOUT_SECONDS = MIN_TIMEOUT_SECONDS
 
@@ -132,14 +135,20 @@ def build_limiter(settings: Settings, clock: Clock, redis_client: Redis | None) 
 
 
 def build_http_client(
-    config: OllamaProviderConfig, transport: httpx.AsyncBaseTransport | None
+    config: OllamaProviderConfig | OpenAIProviderConfig,
+    transport: httpx.AsyncBaseTransport | None,
+    *,
+    default_base_url: str,
 ) -> httpx.AsyncClient:
-    """One client for one HTTP provider. Tests pass an `httpx.MockTransport`; none connects here."""
+    """One client for one HTTP provider. Tests pass an `httpx.MockTransport`; none connects here.
+
+    An absent or empty `base_url` means the provider's `default_base_url`.
+    """
     seconds = config.timeout_seconds
     timeout = httpx.Timeout(
         connect=CONNECT_TIMEOUT_SECONDS, read=seconds, write=seconds, pool=seconds
     )
-    base_url = config.base_url or DEFAULT_BASE_URL
+    base_url = config.base_url or default_base_url
     return httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
 
 
@@ -157,10 +166,20 @@ def build_providers(
         if isinstance(config, MockProviderConfig):
             providers[name] = MockProvider(clock, id_source)
         elif isinstance(config, OllamaProviderConfig):
-            client = build_http_client(config, http_transport)
+            client = build_http_client(
+                config, http_transport, default_base_url=OLLAMA_DEFAULT_BASE_URL
+            )
             clients.append(client)
             providers[name] = OllamaProvider(
                 client, clock, id_source, max_response_bytes=config.max_response_bytes
+            )
+        elif isinstance(config, OpenAIProviderConfig):
+            client = build_http_client(
+                config, http_transport, default_base_url=OPENAI_DEFAULT_BASE_URL
+            )
+            clients.append(client)
+            providers[name] = OpenAIProvider(
+                client, table.api_keys[name], max_response_bytes=config.max_response_bytes
             )
         else:
             field = format_path(["providers", name, "type"])
