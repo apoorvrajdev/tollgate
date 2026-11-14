@@ -16,10 +16,10 @@ Accepted decisions change only through a new ADR.
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 and ADR-0012 | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
-| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted | 2026-11-13 |
+| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted - amended by ADR-0013 | 2026-11-13 |
 | [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
 | [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
-| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Proposed | 2026-11-14 |
+| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted | 2026-11-14 |
 
 ---
 
@@ -309,7 +309,7 @@ ADR-0011 · 2026-11-12
 ## ADR-0010
 
 **Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008)** ·
-Accepted · 2026-11-13
+Accepted - amended by ADR-0013 · 2026-11-13
 
 - **Context:** ADR-0004 adds providers in a fixed order (mock, Ollama, OpenAI, Anthropic) and allows only the
   mock or recorded fakes in tests. ADR-0007 said `tiktoken` would be reconsidered when the first real adapter
@@ -375,7 +375,7 @@ Accepted · 2026-11-13
     | `timeout` | the configured timeout passed (`httpx.TimeoutException`) | yes |
     | `rate_limited` | upstream 429 | yes |
     | `upstream_status` | any other non-2xx; retryable only when 500 or above, including 529 | 5xx only |
-    | `bad_response` | a 2xx that cannot be translated: a body that cannot be decoded (`httpx.DecodingError`) or is not valid JSON, a missing field, an unknown finish reason, a negative or missing token count | no |
+    | `bad_response` | a 2xx that cannot be translated: a body that cannot be decoded (`httpx.DecodingError`) or is not valid JSON, a missing field, an unknown finish reason, a negative or missing token count, a body above the provider's `max_response_bytes` (ADR-0013) | no |
 
     `httpx.TimeoutException` is a subclass of `httpx.TransportError`, so an adapter checks for a timeout first.
     Messages carry only the kind and the HTTP status. They never carry a response body, which can echo the
@@ -544,7 +544,7 @@ Accepted · 2026-11-13
 
 ## ADR-0013
 
-**Cap the size of a provider reply (amends ADR-0010)** · Proposed · 2026-11-14
+**Cap the size of a provider reply (amends ADR-0010)** · Accepted · 2026-11-14
 
 - **Context:** The Ollama adapter (T-204) opens the reply with `client.stream` and reads it whole with
   `response.aread()`, which joins every decoded chunk in memory, so a 2xx body of any size is held in full before
@@ -605,8 +605,8 @@ Accepted · 2026-11-13
     files stay valid.
   - The OpenAI and Anthropic adapters (T-205, T-206) read their replies through the same helper, with their own
     provider's limit.
-  - When accepted, ADR-0010's status is "Accepted - amended by ADR-0013", and its `bad_response` row names an
-    oversized body. Delivered by T-209.
+  - ADR-0010's status is "Accepted - amended by ADR-0013", and its `bad_response` row names an oversized body.
+    Delivered by T-209. Accepted by the owner as written on 2026-11-14.
 
 ---
 
