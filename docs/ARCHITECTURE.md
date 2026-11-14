@@ -121,10 +121,12 @@ Package layout inside `app/` is decided per phase. Current: `app/api/` (request 
 body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
 `app/providers/` (the `Provider` protocol, `MockProvider`, `ProviderError` with its failure kinds in
 `errors.py`, the Ollama adapter `OllamaProvider` in `ollama.py`, the OpenAI adapter `OpenAIProvider` in
-`openai.py`, the Anthropic adapter `AnthropicProvider` in `anthropic.py`, and `http_body.py`: `read_capped`,
-which reads a 2xx body in decoded chunks up to the provider's `max_response_bytes`, ADR-0013), `app/routing/`
-(`config.py`: the route table file, validated when the settings are read, and the built-in table;
-`router.py`: `Route`, `Router`, `TableRouter` and `run_route`, the ordered fallback loop),
+`openai.py`, the Anthropic adapter `AnthropicProvider` in `anthropic.py`, `fields.py`: the reply checks the
+adapters share, and `http_body.py`: `read_capped`, which reads a 2xx body in decoded chunks up to the
+provider's `max_response_bytes` (ADR-0013), and `post_json`, beside it, the one request with its status and
+failure mapping), `app/routing/` (`config.py`: the route table file, validated when the settings are read,
+and the built-in table; `router.py`: `Route`, `Router`, `TableRouter` and `run_route`, the ordered fallback
+loop),
 `app/limits/` (the token estimator, the `RateLimiter` interface, `charge.py` (`charged_tokens`: the settle
 charge capped at the bucket capacity, ADR-0012), the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
