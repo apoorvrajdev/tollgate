@@ -1,7 +1,7 @@
 import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, Literal, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol, assert_never
 
 import httpx
 from fastapi import FastAPI
@@ -16,6 +16,8 @@ from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
 from app.limits.memory import InMemoryRateLimiter
 from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
+from app.providers.anthropic import DEFAULT_BASE_URL as ANTHROPIC_DEFAULT_BASE_URL
+from app.providers.anthropic import AnthropicProvider
 from app.providers.base import Provider
 from app.providers.ids import UuidIdSource
 from app.providers.mock import MockProvider
@@ -25,12 +27,11 @@ from app.providers.openai import DEFAULT_BASE_URL as OPENAI_DEFAULT_BASE_URL
 from app.providers.openai import OpenAIProvider
 from app.routing.config import (
     MIN_TIMEOUT_SECONDS,
-    ROUTES_FILE_VAR,
+    AnthropicProviderConfig,
     MockProviderConfig,
     OllamaProviderConfig,
     OpenAIProviderConfig,
     RouteTable,
-    format_path,
 )
 from app.routing.router import TableRouter
 from app.settings import (
@@ -41,8 +42,6 @@ from app.settings import (
     SettingsError,
 )
 
-# Provider types this build can serve. The Anthropic adapter task adds its type (T-206).
-BUILT_PROVIDER_TYPES = ("mock", "ollama", "openai")
 # The connect timeout is fixed; `timeout_seconds` covers reads, writes and the pool (ADR-0010).
 CONNECT_TIMEOUT_SECONDS = MIN_TIMEOUT_SECONDS
 
@@ -135,7 +134,7 @@ def build_limiter(settings: Settings, clock: Clock, redis_client: Redis | None) 
 
 
 def build_http_client(
-    config: OllamaProviderConfig | OpenAIProviderConfig,
+    config: OllamaProviderConfig | OpenAIProviderConfig | AnthropicProviderConfig,
     transport: httpx.AsyncBaseTransport | None,
     *,
     default_base_url: str,
@@ -157,7 +156,7 @@ def build_providers(
 ) -> ProvidersBuild:
     """One provider per entry in the route table, by name, and the HTTP clients it built.
 
-    A type that is not built yet stops startup; the message names the field, never a value.
+    Every type in the route table is built; mypy checks that each has a branch.
     """
     providers: dict[str, Provider] = {}
     clients: list[AsyncCloseable] = []
@@ -181,10 +180,21 @@ def build_providers(
             providers[name] = OpenAIProvider(
                 client, table.api_keys[name], max_response_bytes=config.max_response_bytes
             )
+        elif isinstance(config, AnthropicProviderConfig):
+            client = build_http_client(
+                config, http_transport, default_base_url=ANTHROPIC_DEFAULT_BASE_URL
+            )
+            clients.append(client)
+            providers[name] = AnthropicProvider(
+                client,
+                table.api_keys[name],
+                config.default_max_tokens,
+                clock,
+                id_source,
+                max_response_bytes=config.max_response_bytes,
+            )
         else:
-            field = format_path(["providers", name, "type"])
-            built = ", ".join(BUILT_PROVIDER_TYPES)
-            raise SettingsError(ROUTES_FILE_VAR, f"{field}: is not built yet; built types: {built}")
+            assert_never(config)
     return ProvidersBuild(providers, tuple(clients))
 
 
@@ -200,9 +210,9 @@ def create_app(
     """Build the app. With no settings it reads os.environ; start with `uvicorn --factory`.
 
     `provider` sets the registry entry named `mock`; `providers` then sets entries by name, so
-    tests can supply several. An entry the route table does not name is never routed to. Neither
-    skips the check for types not built yet. `http_transport` is used by every HTTP client the app
-    builds (tests pass an `httpx.MockTransport`).
+    tests can supply several. An entry the route table does not name is never routed to; one it
+    names replaces the provider built for that name. `http_transport` is used by every HTTP client
+    the app builds (tests pass an `httpx.MockTransport`).
 
     A client the app builds is appended to `app.state.owned_clients`; the lifespan closes them at
     shutdown, last built first. A client passed in is the caller's to close.

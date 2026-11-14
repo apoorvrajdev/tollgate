@@ -90,20 +90,27 @@ rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 
 The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully
 checked when the settings are read, so a broken file stops the gateway at startup. Each request is routed by
-its `model` and falls back to the next target on a retryable provider failure. The `mock`, `ollama` and
-`openai` types are built; until the Anthropic adapter task (T-206) a file naming `anthropic` stops the gateway
-at startup with `TOLLGATE_ROUTES_FILE: providers.<name>.type: is not built yet` (checked after the file and
-its `api_key_env` variables, so a missing key is reported first), and the example below starts only once
-that adapter exists. An `ollama` provider talks to `base_url` (default `http://localhost:11434`) through
+its `model` and falls back to the next target on a retryable provider failure. All four types, `mock`,
+`ollama`, `openai` and `anthropic`, are built. An `ollama` provider talks to `base_url` (default `http://localhost:11434`) through
 Ollama's native `POST /api/chat`; `timeout_seconds` applies to each read, write and pool wait, and connecting
 always waits at most 5 seconds. The gateway checks nothing about `base_url` at startup (an empty one counts as not given): a
 malformed one fails when the first request uses it. Credentials in `base_url` are sent as HTTP Basic
 authentication and are not treated as secrets by the gateway. An `openai` provider posts to
 `<base_url>/v1/chat/completions` (default `base_url` `https://api.openai.com`), so `base_url` is the host
 without `/v1`: `https://api.openai.com/v1` would request `/v1/v1/chat/completions`, a path that does not
-exist; a 4xx answer is not retryable and does not fall back. Its key is sent only as `Authorization: Bearer <key>`. The client's `max_completion_tokens`,
+exist; a 429 and any 5xx are retryable and fall back, and any other 4xx does not. Its key is sent only as `Authorization: Bearer <key>`. The client's `max_completion_tokens`,
 else `max_tokens`, is sent as `max_completion_tokens` (never `max_tokens`); `temperature` and each message's
-`name` are forwarded when given, and `user` is not. The upstream `id`, `created` and `model` are kept.
+`name` are forwarded when given, and `user` is not. The upstream `id`, `created` and `model` are kept. An
+`anthropic` provider posts to `<base_url>/v1/messages` (default `base_url` `https://api.anthropic.com`, again
+the host without `/v1`) with `anthropic-version: 2026-10-21`; its key is sent only as `x-api-key`. Every
+system message is joined with a line break, in order, into Anthropic's `system` field. `max_tokens` is the
+client's `max_completion_tokens`, else `max_tokens`, else the provider's `default_max_tokens`. The client's
+`temperature` is never sent, because that API version rejects any temperature, and neither are `name` and
+`user`. The reply is the text blocks joined in order (thinking and other blocks are dropped), and prompt
+tokens include both cache counts. The response `id` and `created` come from the gateway, and `model` is the
+one Anthropic reports. A 429 and any 5xx, including 529 (overloaded), are retryable and fall back; any other
+4xx does not. A request made only of system messages is sent with an empty `messages` list, and Anthropic's
+answer to it has not been checked.
 
 ```json
 {
