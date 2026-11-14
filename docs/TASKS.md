@@ -1068,6 +1068,14 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   (pinned by a test in T-204). A startup check would name `TOLLGATE_ROUTES_FILE` and the field path, never the
   value, since the value can hold credentials, and would decide whether an empty string is rejected (T-204 plan
   review, owner decision to log it).
+- **Extract the HTTP adapters' shared code:** once the Anthropic adapter (T-206) is merged, the Ollama, OpenAI
+  and Anthropic adapters repeat the same helpers: the reply text check, the 429-or-`upstream_status` mapping, the
+  httpx exception handling (a timeout checked before `TransportError`, then `DecodingError`) and the JSON
+  parsing, about 35 lines each. A refactor would move them into one shared module with no change in behaviour or
+  contract, keep the existing adapter tests unchanged and green, and add a kill test per shared helper. As a
+  separate line in that card, a behaviour change: the Ollama adapter would raise each `ProviderError` after its
+  `except` block, as the OpenAI adapter does, so the error has no `__context__` (T-205 known gaps 1 and 3; owner
+  request, 2026-11-14).
 - **IETF RateLimit header fields:** emit `RateLimit` and `RateLimit-Policy` alongside the `x-ratelimit-*`
   headers once draft-ietf-httpapi-ratelimit-headers becomes an RFC and has a unit for tokens (ADR-0008).
 
