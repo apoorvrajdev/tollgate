@@ -3,25 +3,24 @@
 One attempt per call. Every failure it can classify is a `ProviderError` whose message holds only
 the kind and the HTTP status, never the response body (which can echo the prompt or the key) or
 the URL. The key is held as a `SecretStr` and put only into the `Authorization` header of each
-request. The status is read before the body, and the body of a non-2xx answer is never read. A 2xx
-body is read in decoded chunks up to `max_response_bytes`, and a larger one is a bad response
-(ADR-0013).
+request. The request and the reply body are handled by `post_json` (`app/providers/http_body.py`):
+the status is read first, a non-2xx body is never read, and a 2xx body is read up to
+`max_response_bytes` (ADR-0013). This module only translates.
 """
 
-import json
 from typing import Any, Literal
 
 import httpx
 from pydantic import SecretStr
 
 from app.api.models import ChatMessage, ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
+from app.providers import fields
 from app.providers.errors import ProviderError
-from app.providers.http_body import read_capped
+from app.providers.http_body import post_json
 from app.routing.config import DEFAULT_MAX_RESPONSE_BYTES
 
 DEFAULT_BASE_URL = "https://api.openai.com"
 CHAT_PATH = "/v1/chat/completions"
-RATE_LIMITED_STATUS = 429
 
 FinishReason = Literal["stop", "length", "content_filter"]
 # OpenAI's `finish_reason` values that map as they are; any other value (tool_calls, function_call)
@@ -57,42 +56,6 @@ def _chat_body(request: ChatRequest) -> dict[str, Any]:
     return body
 
 
-def _text(value: object, status: int) -> str:
-    """A string that can be sent back as UTF-8 (empty is allowed), else a bad response."""
-    if not isinstance(value, str):
-        raise ProviderError("bad_response", status)
-    encodable = True
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError:  # a lone surrogate from a JSON escape
-        encodable = False
-    # Raised after the block: the UnicodeEncodeError holds the whole string, which can echo the key.
-    if not encodable:
-        raise ProviderError("bad_response", status)
-    return value
-
-
-def _non_empty_text(value: object, status: int) -> str:
-    text = _text(value, status)
-    if not text:
-        raise ProviderError("bad_response", status)
-    return text
-
-
-def _whole_number(value: object, status: int) -> int:
-    """A whole number of at least 0 (not a bool), else a bad response."""
-    if type(value) is not int or value < 0:
-        raise ProviderError("bad_response", status)
-    return value
-
-
-def _required_count(usage: dict[str, Any], key: str, status: int) -> int:
-    """A token count that must be present (ADR-0010: a missing count is a bad response)."""
-    if key not in usage:
-        raise ProviderError("bad_response", status)
-    return _whole_number(usage[key], status)
-
-
 def _reply(message: dict[str, Any], reason: FinishReason, status: int) -> tuple[str, FinishReason]:
     """The reply text and the finish reason.
 
@@ -100,7 +63,7 @@ def _reply(message: dict[str, Any], reason: FinishReason, status: int) -> tuple[
     """
     content = message.get("content")
     if content is not None:
-        return _text(content, status), reason
+        return fields.text(content, status), reason
     refusal = message.get("refusal")
     # Only a non-empty refusal string explains null content (owner decision, T-205).
     if not isinstance(refusal, str) or not refusal:
@@ -111,9 +74,9 @@ def _reply(message: dict[str, Any], reason: FinishReason, status: int) -> tuple[
 def _translate(payload: object, status: int) -> ChatResponse:
     if not isinstance(payload, dict):
         raise ProviderError("bad_response", status)
-    response_id = _non_empty_text(payload.get("id"), status)
-    created = _whole_number(payload.get("created"), status)
-    model = _non_empty_text(payload.get("model"), status)
+    response_id = fields.non_empty_text(payload.get("id"), status)
+    created = fields.whole_number(payload.get("created"), status)
+    model = fields.non_empty_text(payload.get("model"), status)
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise ProviderError("bad_response", status)
@@ -128,8 +91,8 @@ def _translate(payload: object, status: int) -> ChatResponse:
     usage = payload.get("usage")
     if not isinstance(usage, dict):
         raise ProviderError("bad_response", status)
-    prompt_tokens = _required_count(usage, "prompt_tokens", status)
-    completion_tokens = _required_count(usage, "completion_tokens", status)
+    prompt_tokens = fields.required_count(usage, "prompt_tokens", status)
+    completion_tokens = fields.required_count(usage, "completion_tokens", status)
     return ChatResponse(
         id=response_id,
         object="chat.completion",
@@ -150,12 +113,6 @@ def _translate(payload: object, status: int) -> ChatResponse:
     )
 
 
-def _status_error(status: int) -> ProviderError:
-    if status == RATE_LIMITED_STATUS:
-        return ProviderError("rate_limited", status)
-    return ProviderError("upstream_status", status)
-
-
 class OpenAIProvider:
     def __init__(
         self,
@@ -169,37 +126,13 @@ class OpenAIProvider:
         self._max_response_bytes = max_response_bytes
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
-        status = 0
         # Built per request, so no attribute and no client default header holds the key.
         headers = {"Authorization": f"Bearer {self._api_key.get_secret_value()}"}
-        # Each failure is raised after its `except` block, so the ProviderError has no
-        # `__context__`: an httpx error can quote the Authorization header, and a body can echo it.
-        failure: ProviderError | None = None
-        content = b""
-        try:
-            async with self._client.stream(
-                "POST", CHAT_PATH, json=_chat_body(request), headers=headers
-            ) as response:
-                status = response.status_code
-                if not response.is_success:
-                    raise _status_error(status)
-                content = await read_capped(response, self._max_response_bytes)
-        # httpx.TimeoutException is a subclass of httpx.TransportError, so it is checked first.
-        except httpx.TimeoutException:
-            failure = ProviderError("timeout")
-        except httpx.TransportError:
-            failure = ProviderError("connection")
-        except httpx.DecodingError:
-            failure = ProviderError("bad_response", status)
-        if failure is not None:
-            raise failure
-        try:
-            payload = json.loads(content.decode("utf-8"))
-        except (
-            ValueError,
-            RecursionError,
-        ):  # invalid UTF-8, invalid JSON, empty body, deep nesting
-            failure = ProviderError("bad_response", status)
-        if failure is not None:
-            raise failure
-        return _translate(payload, status)
+        reply = await post_json(
+            self._client,
+            CHAT_PATH,
+            body=_chat_body(request),
+            headers=headers,
+            max_response_bytes=self._max_response_bytes,
+        )
+        return _translate(reply.payload, reply.status_code)

@@ -2,25 +2,25 @@
 
 One attempt per call. Every failure it can classify is a `ProviderError` whose message holds only
 the kind and the HTTP status, never the response body (which can echo the prompt) or the URL. The
-status is read before the body, and the body of a non-2xx answer is never read. A 2xx body is read
-in decoded chunks up to `max_response_bytes`, and a larger one is a bad response (ADR-0013).
+request and the reply body are handled by `post_json` (`app/providers/http_body.py`): the status is
+read first, a non-2xx body is never read, and a 2xx body is read up to `max_response_bytes`
+(ADR-0013). This module only translates.
 """
 
-import json
 from typing import Any, Literal
 
 import httpx
 
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.clock import Clock
+from app.providers import fields
 from app.providers.errors import ProviderError
-from app.providers.http_body import read_capped
+from app.providers.http_body import post_json
 from app.providers.ids import IdSource
 from app.routing.config import DEFAULT_MAX_RESPONSE_BYTES
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 CHAT_PATH = "/api/chat"
-RATE_LIMITED_STATUS = 429
 
 FinishReason = Literal["stop", "length"]
 # Ollama's `done_reason` values that map as they are; any other value is a bad response.
@@ -48,25 +48,11 @@ def _chat_body(request: ChatRequest) -> dict[str, Any]:
     return body
 
 
-def _text(value: object, status: int) -> str:
-    """A string that can be sent back as UTF-8 (empty is allowed), else a bad response."""
-    if not isinstance(value, str):
-        raise ProviderError("bad_response", status)
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError:  # a lone surrogate from a JSON escape
-        raise ProviderError("bad_response", status) from None
-    return value
-
-
 def _count(payload: dict[str, Any], key: str, status: int) -> int:
     """A token count: absent is 0; present must be a whole number of at least 0 (not a bool)."""
     if key not in payload:
         return 0
-    value = payload[key]
-    if type(value) is not int or value < 0:
-        raise ProviderError("bad_response", status)
-    return value
+    return fields.whole_number(payload[key], status)
 
 
 def _translate(payload: object, status: int, clock: Clock, id_source: IdSource) -> ChatResponse:
@@ -75,8 +61,8 @@ def _translate(payload: object, status: int, clock: Clock, id_source: IdSource) 
     message = payload.get("message")
     if not isinstance(message, dict):
         raise ProviderError("bad_response", status)
-    content = _text(message.get("content"), status)
-    model = _text(payload.get("model"), status)
+    content = fields.text(message.get("content"), status)
+    model = fields.text(payload.get("model"), status)
     if not model:
         raise ProviderError("bad_response", status)
     reason = payload.get("done_reason")
@@ -105,12 +91,6 @@ def _translate(payload: object, status: int, clock: Clock, id_source: IdSource) 
     )
 
 
-def _status_error(status: int) -> ProviderError:
-    if status == RATE_LIMITED_STATUS:
-        return ProviderError("rate_limited", status)
-    return ProviderError("upstream_status", status)
-
-
 class OllamaProvider:
     def __init__(
         self,
@@ -126,25 +106,11 @@ class OllamaProvider:
         self._max_response_bytes = max_response_bytes
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
-        status = 0
-        try:
-            async with self._client.stream("POST", CHAT_PATH, json=_chat_body(request)) as response:
-                status = response.status_code
-                if not response.is_success:
-                    raise _status_error(status)
-                content = await read_capped(response, self._max_response_bytes)
-        # httpx.TimeoutException is a subclass of httpx.TransportError, so it is checked first.
-        except httpx.TimeoutException:
-            raise ProviderError("timeout") from None
-        except httpx.TransportError:
-            raise ProviderError("connection") from None
-        except httpx.DecodingError:
-            raise ProviderError("bad_response", status) from None
-        try:
-            payload = json.loads(content.decode("utf-8"))
-        except (
-            ValueError,
-            RecursionError,
-        ):  # invalid UTF-8, invalid JSON, empty body, deep nesting
-            raise ProviderError("bad_response", status) from None
-        return _translate(payload, status, self._clock, self._id_source)
+        reply = await post_json(
+            self._client,
+            CHAT_PATH,
+            body=_chat_body(request),
+            headers=None,
+            max_response_bytes=self._max_response_bytes,
+        )
+        return _translate(reply.payload, reply.status_code, self._clock, self._id_source)
