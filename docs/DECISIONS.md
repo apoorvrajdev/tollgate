@@ -13,12 +13,12 @@ Accepted decisions change only through a new ADR.
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
 | [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
-| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 | 2026-11-12 |
+| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 and ADR-0012 | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
 | [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted | 2026-11-13 |
 | [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
-| [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Proposed | 2026-11-14 |
+| [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
 
 ---
 
@@ -169,8 +169,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0007
 
-**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted - amended by ADR-0010 ·
-2026-11-12
+**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted - amended by ADR-0010
+and ADR-0012 · 2026-11-12
 
 - **Context:** The limit is in tokens per API key, but the true cost of a request is known only after the
   provider answers. OpenAI says it counts the maximum of `max_tokens` and an estimate "based on the character
@@ -496,7 +496,7 @@ Accepted · 2026-11-13
 
 ## ADR-0012
 
-**Cap the tokens a settle charges at the bucket capacity (amends ADR-0007)** · Proposed · 2026-11-14
+**Cap the tokens a settle charges at the bucket capacity (amends ADR-0007)** · Accepted · 2026-11-14
 
 - **Context:** ADR-0007 charges the difference between the provider's reported `total_tokens` and the
   reservation with no upper bound, and ADR-0010 rejects only a negative or missing count. In the T-204 review a
@@ -537,8 +537,9 @@ Accepted · 2026-11-13
     bucket, and the response's `usage` shows the real figure, but nothing records that a cap applied until
     there is observability (Phase 4).
   - The Redis debt floor stays as a second guard; one request can no longer reach it.
-  - ADR-0007's sentence "The provider's usage figures are trusted" holds up to the capacity. When this is
-    accepted, ADR-0007's status becomes "Accepted - amended by ADR-0010 and ADR-0012". Delivered by T-208.
+  - ADR-0007's sentence "The provider's usage figures are trusted" holds up to the capacity. ADR-0007's status
+    is "Accepted - amended by ADR-0010 and ADR-0012". Delivered by T-208. Accepted by the owner as written on
+    2026-11-14.
 
 ---
 
