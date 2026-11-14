@@ -22,6 +22,11 @@ MAX_TARGETS = 5
 MIN_TIMEOUT_SECONDS = 5
 MAX_TIMEOUT_SECONDS = 600
 DEFAULT_TIMEOUT_SECONDS = 60
+# The size of a 2xx reply body, counted after Content-Encoding is decoded (ADR-0013). Chosen, not
+# measured: no provider documents a reply size.
+MIN_RESPONSE_LIMIT_BYTES = 1_024
+MAX_RESPONSE_LIMIT_BYTES = 67_108_864  # 64 MiB
+DEFAULT_MAX_RESPONSE_BYTES = 8_388_608  # 8 MiB
 PROVIDER_TYPES = ("mock", "ollama", "openai", "anthropic")
 # A provider name is sent back as the x-tollgate-provider header, so it is limited to the visible
 # ASCII characters (no space, control, CR, LF or non-ASCII character), which a header can carry.
@@ -44,6 +49,9 @@ class _HttpProviderConfig(BaseModel):
     base_url: str | None = None
     timeout_seconds: int = Field(
         default=DEFAULT_TIMEOUT_SECONDS, ge=MIN_TIMEOUT_SECONDS, le=MAX_TIMEOUT_SECONDS
+    )
+    max_response_bytes: int = Field(
+        default=DEFAULT_MAX_RESPONSE_BYTES, ge=MIN_RESPONSE_LIMIT_BYTES, le=MAX_RESPONSE_LIMIT_BYTES
     )
 
 
