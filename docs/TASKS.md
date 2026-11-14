@@ -28,6 +28,7 @@ request, as for Phase 1.
       reservation and one settle
 - [ ] The Ollama, OpenAI and Anthropic adapters translate requests, responses and errors as ADR-0010 says, each
       tested through `httpx.MockTransport` only; no provider SDK is a dependency
+- [ ] ADR-0012 accepted or revised, and the status line of ADR-0007 updated to name it
 - [ ] The app closes the HTTP and Redis clients it builds when it shuts down
 - [ ] Tests use no network and no paid API (the CI Redis container excepted, ADR-0006). A real provider is
       called only by the owner, by hand, and the owner's run against a local Ollama is recorded in the Log or
@@ -76,8 +77,9 @@ No gateway features yet. The owner signed off the gate on 2026-11-12, and Phase 
 ## Board
 
 Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
-T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-207 in
-number order. The rows below are in delivery order; the cards further down are listed by ID.
+T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-204,
+then T-208 (added 2026-11-14), then T-205 to T-207. The rows below are in delivery order; the cards further down
+are listed by ID.
 
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -98,8 +100,9 @@ number order. The rows below are in delivery order; the cards further down are l
 | T-202 | Routing and fallback on chat completions | 2 | done | T-201 |
 | T-203 | Close the clients the app builds on shutdown, and check provider names | 2 | done | T-202 |
 | T-204 | Ollama adapter | 2 | done | T-203 |
-| T-205 | OpenAI adapter | 2 | todo | T-204; the backlog item "Cap what `settle` charges" resolved |
-| T-206 | Anthropic adapter | 2 | todo | T-204; the backlog item "Cap what `settle` charges" resolved |
+| T-208 | Cap what `settle` charges | 2 | todo | T-204; ADR-0012 accepted |
+| T-205 | OpenAI adapter | 2 | todo | T-204, T-208 |
+| T-206 | Anthropic adapter | 2 | todo | T-204, T-208 |
 | T-207 | Real-provider guide and the owner's Ollama run | 2 | todo | T-204, T-205, T-206 |
 
 ---
@@ -798,9 +801,9 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Status:** todo
 - **Goal:** a route can be served by OpenAI chat completions, tested only with `httpx.MockTransport`.
 - **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
-- **Depends on:** T-204, and the backlog item "Cap what `settle` charges (before T-205)" resolved: a
-  provider's reported usage must be bounded before `settle` (owner decision, T-204 review), so this task does not
-  start until that item is a task that is `done`, or the owner records that it is waived.
+- **Depends on:** T-204 and T-208: a provider's reported usage must be bounded before `settle` (owner
+  decision, T-204 review), so this task does not start until T-208 is `done`, or the owner records that it is
+  waived.
 - **Deliverables:**
   - `app/providers/openai.py`: `OpenAIProvider(client, api_key)` posting to `/v1/chat/completions` (default
     base URL `https://api.openai.com`) with `Authorization: Bearer <key>`, by the ADR-0010 rules. The registry
@@ -831,9 +834,9 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Status:** todo
 - **Goal:** a route can be served by the Anthropic Messages API, tested only with `httpx.MockTransport`.
 - **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
-- **Depends on:** T-204, and the backlog item "Cap what `settle` charges (before T-205)" resolved: a
-  provider's reported usage must be bounded before `settle` (owner decision, T-204 review), so this task does not
-  start until that item is a task that is `done`, or the owner records that it is waived.
+- **Depends on:** T-204 and T-208: a provider's reported usage must be bounded before `settle` (owner
+  decision, T-204 review), so this task does not start until T-208 is `done`, or the owner records that it is
+  waived.
 - **Deliverables:**
   - `app/providers/anthropic.py`: `AnthropicProvider(client, api_key, default_max_tokens, clock, id_source)`
     posting to `/v1/messages` (default base URL `https://api.anthropic.com`) with `x-api-key`,
@@ -889,6 +892,66 @@ number order. The rows below are in delivery order; the cards further down are l
 - **Branch and commits:** `docs/t-207-provider-guide`; `docs(setup): add the real-provider guide and example
   routes`, `test(routing): load the example route table`, `docs(tasks): complete T-207`.
 - **Size:** about 150 lines.
+
+### T-208 - Cap what `settle` charges
+
+- **Status:** todo
+- **Goal:** one absurd usage count from a provider can no longer lock the caller's key out. A 200 charges at
+  most the bucket capacity, whichever adapter served it and whichever limiter is configured (ADR-0012).
+- **Context:** ADR-0007, ADR-0010, ADR-0012, `app/api/chat.py`, `app/limits/limiter.py` (`Decision`),
+  `tests/test_chat_rate_limits.py`, `tests/test_app_ollama.py`, the T-204 Log row (known gap 3).
+- **Depends on:** T-204; ADR-0012 accepted. Delivered before T-205 and T-206.
+- **Deliverables:**
+  - `app/limits/charge.py`: `charged_tokens(reported_tokens: int, limit_tokens: int) -> int`, the smaller of
+    the two. A negative count is returned unchanged, so it still makes `settle` raise as today (ADR-0010, out
+    of scope here).
+  - `app/api/chat.py`: the 200 path settles with `charged_tokens(<the completion's total_tokens>,
+    decision.limit_tokens)`. The 502 paths, the completion and its `usage`, and every header are unchanged.
+    The module docstring states the cap.
+  - `docs/ARCHITECTURE.md`: `charge.py` added to the `app/limits/` layout, and one sentence on the cap where
+    the route's settle is described.
+- **Contract:** unchanged. No response, header or field is added, and the snapshot does not change.
+- **Acceptance criteria:**
+  1. `charged_tokens` returns the reported count when it is at most the limit (0, the limit minus 1, exactly
+     the limit) and the limit when it is above (the limit plus 1, `10**30`), returns a negative count
+     unchanged, and a property test over 1,000 integer pairs from a seeded `random.Random` (no new dependency;
+     reported counts from below 0 to above 2^63) shows the result is never above the limit and equals the
+     reported count whenever that is at most the limit.
+  2. Through the whole app with the in-memory limiter, at 60 tokens per minute (1 token per second) so that one
+     token of balance moves every header: a provider reporting `total_tokens` of `10**30` gives a 200 whose
+     `usage` is exactly what the provider reported; a follow-up request on the same frozen clock is a 429 whose
+     `Retry-After` is the follow-up's reservation in seconds (a balance of exactly 0); after one full refill a
+     follow-up is a 200.
+  3. The same through the whole app with the Redis limiter on fakeredis; in addition the stored
+     `balance_units` after the settle is exactly 0, not the debt floor, and the key's PTTL equals one full
+     refill plus 1 ms plus the 60-second margin (the script's expiry, T-106), checked with the existing
+     `assert_pttl` tolerance.
+  4. Boundaries, through the whole app at 60 tokens per minute: a reported count of exactly the capacity and of
+     the capacity plus 1 both leave a balance of exactly 0, and the capacity minus 1 leaves exactly 1. Shown by
+     advancing the clock by exactly the follow-up's reservation in seconds: a balance of 0 gives a 200 with
+     `x-ratelimit-remaining-tokens: 0`, a balance of 1 gives 1, and an uncapped balance of -1 gives a 429. On
+     Redis the stored hash shows the same balances.
+  5. A count at or below the capacity is charged exactly as before: the existing settle and 502 tests pass
+     unchanged, and a new test charges a count above the reservation and below the capacity in full.
+  6. Through the Ollama adapter and an `httpx.MockTransport`, counts summing to more than the capacity give a
+     200 with the reported `usage` and a capped charge, so the cap holds for HTTP adapters, not only the mock.
+     The charge is shown as in criterion 2: at 60 tokens per minute, the follow-up's `Retry-After` equals its
+     reservation in seconds.
+  7. The OpenAPI snapshot is unchanged.
+- **Verification:** `python scripts/check.py` green; mutation table, listed before the first run: the cap
+  removed; `max` in place of `min`; the cap at the reservation; the cap at twice the reservation; the cap at the
+  limit plus the reservation; the cap at the limit plus 1 and the limit minus 1; the cap taken from
+  `remaining_tokens`; the cap skipped for a served HTTP adapter (applied only when the mock served); the cap
+  skipped when the limiter is the Redis one, and separately when it is the in-memory one; the client's
+  `usage.total_tokens` rewritten to the charge; a negative count clamped to 0 inside `charged_tokens` (a clamp
+  in the route is out of scope, since no criterion feeds a negative count through the app); the `bad_response`
+  charge taken from the limit instead of the reservation. A comparison
+  written as `<` instead of `<=` at the limit is equivalent and is recorded as such; `gh pr checks <n>
+  --watch`.
+- **Branch and commits:** `fix/t-208-settle-cap`; `feat(limits): add the capped settle charge` (the function
+  and its unit tests), `fix(api): cap what a chat completion settles at the bucket capacity` (the route, the
+  app tests and the ARCHITECTURE sentence), `docs(tasks): complete T-208`.
+- **Size:** about 150 lines, mostly tests.
 
 ## Later phases (broken into tasks at each gate)
 
@@ -949,14 +1012,6 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   (pinned by a test in T-204). A startup check would name `TOLLGATE_ROUTES_FILE` and the field path, never the
   value, since the value can hold credentials, and would decide whether an empty string is rejected (T-204 plan
   review, owner decision to log it).
-- **Cap what `settle` charges (before T-205):** a provider's `usage.total_tokens` reaches `limiter.settle` with
-  no bound beyond a whole number of at least 0, so one absurd count (`10**30` was probed) puts the caller's key
-  at the debt floor on Redis (about 238 years to recover at 600 tokens per minute) or at -10**30 tokens in
-  memory, and the key stays refused. Bound the actual charge in `app/api/chat.py`, for example at a multiple of
-  the reservation, so every adapter is covered (the OpenAI and Anthropic ones are the more exposed), and decide
-  the multiple, what the client's `usage` shows, whether the request is still a 200, and the test through the
-  whole app with each limiter. It changes ADR-0007's settle rule, so it needs a line in an ADR (T-204 review,
-  owner decision to log it and land it before T-205).
 - **IETF RateLimit header fields:** emit `RateLimit` and `RateLimit-Policy` alongside the `x-ratelimit-*`
   headers once draft-ietf-httpapi-ratelimit-headers becomes an RFC and has a unit for tokens (ADR-0008).
 
@@ -1007,3 +1062,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-14 | T-203 | Process deviation and known gaps. (1) Commit `7fec641` does not pass `mypy` on its own: its test passed a `KeyboardInterrupt` to a fake typed for `Exception`, and the next commit `cb4e224` widens the type. History is not rewritten, so the branch has one commit that is not green by itself, and the two follow-up test commits are in addition to the three the card named. (2) A provider name is still printed by any other error in the same provider entry, because pydantic validates before the name check and its error path contains the name (a bad name and an unknown field, for one); this is the T-201 path format, startup only, and the one-fault files in criterion 5 do not reach it; the fix is a name check before validation, or printing a placeholder for the key, and is left to the owner. (3) A failing close is raised with the library's own error text and no redaction; redis-py's close path was read and none of its errors carries the password, but no test pins that. (4) No length cap on a provider name, which is copied into every 200's header. (5) `_close_all` is imported by one test, the only dependency on a private name. (6) `LimiterBuild` and `AsyncCloseable` are not named in `ARCHITECTURE.md`, which does not list `build_limiter` either. The T-108 gap of the unclosed Redis client is closed by this task; the HTTP clients are registered by the adapter tasks | Reviewer and verifier findings |
 | 2026-11-14 | T-204 | The Ollama adapter is built. `app/providers/ollama.py` (`OllamaProvider(client, clock, id_source)`) posts `POST /api/chat` with exactly `model`, `messages` (role and content only), `"stream": false` and, only when given, `options.num_predict` (from `max_completion_tokens`, else `max_tokens`) and `options.temperature` (0.0 is sent); `name`, `user` and `n` are not sent. A reply must be a JSON object with a `message` object holding a string `content`, a non-empty string `model` and a `done_reason` of exactly `stop` or `length`; `prompt_eval_count` and `eval_count` are 0 when absent, and must otherwise be whole numbers of at least 0 (a bool, a float, `NaN`, `Infinity`, a string or null is a `bad_response`); `id` and `created` come from the injected sources (never the body) and the output role is always `assistant`. Failures are `ProviderError`s whose message holds only the kind and the status: a timeout (checked before the other `httpx.TransportError`s) and a connection error, both retryable; 429 `rate_limited`; any other non-2xx `upstream_status`, retryable from 500 only; an undecodable, empty or untranslatable 2xx `bad_response` with its status. The response is streamed so the body of a non-2xx answer is never read, and redirects are not followed. `create_app()` gains `http_transport=` and builds one `httpx.AsyncClient` per `ollama` provider (base URL, default `http://localhost:11434`; 5 seconds to connect and `timeout_seconds` for reads, writes and the pool, per ADR-0010) on `app.state.owned_clients`, so T-203's lifespan closes them; `build_providers` now returns a `ProvidersBuild` like the limiter's `LimiterBuild`. `httpx`, `httpcore` and `certifi` moved from `requirements-dev.txt` to `requirements.txt` and `httpx>=0.28.1` to the runtime dependencies in `pyproject.toml`: the union of the two files is identical to `main`'s, and fresh Windows venvs for both files installed with `--only-binary=:all:` with a clean `pip check` and a freeze equal to the union (the Linux install is shown only by CI). `IdSource` and `UuidIdSource` moved to `app/providers/ids.py`; a test checks the adapter does not import the mock. The contract is unchanged. `scripts/check.py` passed: 14 contract and 1052 other tests, 45 deselected. The change is 1,063 added lines (215 in `app/`, 826 in tests, the rest requirements and docs) in 14 files, against about 350 planned for the code; the owner approved the full size at plan review because the card's figure counts only production code. Mutation check on scratch copies, one mutant at a time with a timeout: 74 mutants (the card's 13 as 29 variants, and 45 more: temperature by truthiness, options sent empty, `user` or `n` forwarded, each of read, write and pool and the connect timeout changed, one client shared or the transport not passed, a wrong or ignored default `base_url`, a bool or a negative or zero count accepted, the model or either lone-surrogate check dropped, the 2xx test `== 200`, `< 300`, `<= 300`, `>= 300` or `< 400`, the 429 branch dropped, `DecodingError` unhandled, a non-2xx body read, redirects followed per request or on the client, UTF-8 decoding removed, each shape check dropped, the status of a `bad_response` 0 or None, an unbuilt type, a client built for a mock, the mock imported, a 204 as `upstream_status`, the role taken from the reply). Round one caught 65 of 70 and left five survivors: `base_url` with `is None` instead of `or`, the surrogate check missing for `model` only, a 1xx status accepted as success, redirects followed per request, and the output role taken from the reply. Round two killed those and added five mutants, one of which survived: `follow_redirects=True` on the app's client, because the redirect test used its own client; a whole-app redirect test kills it (the final mutant was run by hand on a scratch copy, and the full check passed on the final tree). No equivalent mutant is claimed. Two feedback iterations. Reviewer APPROVE with eight Minor findings, five applied (the client order in `ARCHITECTURE.md`, stale comments in `app/main.py`, a note on credentials in `base_url`, a working-directory-independent path in a test, and the `NaN`, `Infinity` and surrogate cases), the rest below | Verifier tables, rounds one and two; `check.py` output; `gh pr checks` is recorded in the pull request |
 | 2026-11-14 | T-204 | Known gaps and decisions. (1) A bad `base_url` is not checked at startup: a malformed one raises `httpx.InvalidURL` or `UnsupportedProtocol` at the first request, which `run_route` turns into a 502 with a full refund and no fallback (an unclassified exception) or a retryable `connection` error; an empty string counts as not given and uses the default host, which a test pins; the owner logged startup validation as a backlog item. (2) Credentials in `base_url` become HTTP Basic authentication and are kept as plain text in the route file and in `OllamaProviderConfig`, so a repr of the route table would show them; no message, header or log line does (tested for errors and the 502), and `docs/setup.md` says the gateway does not treat them as secrets. (3) The reply is read whole with no size cap, which suits a local Ollama; a count such as `10**30` is accepted and returned in `usage`, and nothing between the adapter and `settle` bounds it. The Redis limiter clamps the charge to its debt floor (`test_charges_stop_at_the_debt_floor_exactly` covers `10**30` at the limiter level; no test goes through the adapter or the app), so the stored balance stays valid, but the key is then in the deepest debt and refused for years (about 238 years at 600 tokens per minute, with the key's expiry set to match); the in-memory limiter has no floor and holds exactly -10**30 tokens, with a `Retry-After` of 29 digits. The owner logged a cap on what `settle` charges as a backlog item, to land before T-205. (4) A startup `SettingsError` after an Ollama client was built leaves that unopened client unclosed, which is harmless; the provider clients are appended before the Redis client, so Redis closes first. (5) `provider=` and `providers=` overrides keep the client built for that name, and the table stays the source of truth. (6) Criterion 6 for CI (the Linux install of the moved requirements) is shown only by the pull request's `lint and test` run, and CI never installs `requirements.txt` alone. T-205 and T-206 reuse `build_http_client` and the owned-client list | Reviewer and verifier findings; plan review |
+| 2026-11-14 | - | T-208 planned from the backlog item "Cap what `settle` charges", which it replaces; ADR-0012 proposed (cap a 200's charge at the bucket capacity, `limit_tokens` on the reserve decision, amending ADR-0007). The backlog's example, a multiple of the reservation, was not chosen: a request with no max field reserves only its input estimate (7 tokens for one user message of `hi`), so any small multiple undercharges ordinary answers. T-205 and T-206 now depend on T-208, which is delivered after T-204; the Phase 2 gate gains the ADR-0012 item | `docs/DECISIONS.md`; this planning pull request |
