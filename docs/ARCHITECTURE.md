@@ -122,7 +122,8 @@ body and handler, API key authentication, the rate-limit headers in `limit_heade
 `app/providers/` (the `Provider` protocol, `MockProvider`, and `ProviderError` with its failure kinds in
 `errors.py`), `app/routing/` (`config.py`: the route table file, validated when the settings are read, and the
 built-in table; `router.py`: `Route`, `Router`, `TableRouter` and `run_route`, the ordered fallback loop),
-`app/limits/` (the token estimator, the `RateLimiter` interface, the in-memory token
+`app/limits/` (the token estimator, the `RateLimiter` interface, `charge.py` (`charged_tokens`: the settle
+charge capped at the bucket capacity, ADR-0012), the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
 fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
 behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: `cache/`.
@@ -150,8 +151,9 @@ serves with the ADR-0011 404 before any estimate or reservation, and with no lim
 reserves the estimate plus the completion allowance under the caller id and answers a refusal with 429.
 `run_route` tries each target once, in order, with the request's `model` replaced by the target's upstream
 model (the client's when it has none), and moves on only after a retryable `ProviderError`. A 200 settles
-once with the serving attempt's `usage.total_tokens`, keeps the body `model` the provider reported, and
-carries `x-tollgate-provider` and `x-tollgate-fallbacks`. A route that ends without an answer gives the
+once with the serving attempt's `usage.total_tokens`, capped at the bucket capacity (`charged_tokens` with the
+reserve decision's `limit_tokens`, ADR-0012) while the response's `usage` is returned unchanged, keeps the body
+`model` the provider reported, and carries `x-tollgate-provider` and `x-tollgate-fallbacks`. A route that ends without an answer gives the
 ADR-0008 502: the whole reservation is refunded, except after a `bad_response`, which is charged as
 reserved (ADR-0010). Only the provider calls are guarded, so a limiter error is a 500, never a refund.
 The limit headers come from the `Decision` that `reserve` returned, so a 200 shows the balance after the
