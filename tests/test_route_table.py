@@ -802,3 +802,76 @@ def test_a_provider_name_is_served_unchanged_in_the_provider_header(
     assert response.status_code == 200
     assert (b"x-tollgate-provider", name.encode("ascii")) in response.headers.raw
     assert response.headers["x-tollgate-fallbacks"] == "0"
+
+
+# max_response_bytes on the HTTP providers (ADR-0013, T-209).
+
+HTTP_PROVIDERS = [
+    pytest.param(OLLAMA, id="ollama"),
+    pytest.param(OPENAI, id="openai"),
+    pytest.param(ANTHROPIC, id="anthropic"),
+]
+SIZE_TYPE_REASON = "has the wrong type"
+
+
+def load_provider(tmp_path: Path, provider: dict[str, Any]) -> Any:
+    environ = env(write_json(tmp_path, with_provider(provider)), CLOUD_KEY="test-key-value")
+    return Settings.from_env(environ).route_table.providers["p"]
+
+
+@pytest.mark.parametrize("provider", HTTP_PROVIDERS)
+def test_max_response_bytes_defaults_to_8_mib_on_each_http_provider(
+    tmp_path: Path, provider: dict[str, Any]
+) -> None:
+    assert load_provider(tmp_path, provider).max_response_bytes == 8_388_608
+
+
+@pytest.mark.parametrize("size_bytes", [1_024, 67_108_864], ids=["lowest", "highest"])
+@pytest.mark.parametrize("provider", HTTP_PROVIDERS)
+def test_max_response_bytes_accepts_its_bounds(
+    tmp_path: Path, provider: dict[str, Any], size_bytes: int
+) -> None:
+    loaded = load_provider(tmp_path, {**provider, "max_response_bytes": size_bytes})
+    assert loaded.max_response_bytes == size_bytes
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        pytest.param(1_023, "must be at least 1024", id="below-lowest"),
+        pytest.param(67_108_865, "must be at most 67108864", id="above-highest"),
+        pytest.param(True, SIZE_TYPE_REASON, id="bool"),
+        pytest.param(1024.0, SIZE_TYPE_REASON, id="float"),
+        pytest.param("1024", SIZE_TYPE_REASON, id="string"),
+    ],
+)
+@pytest.mark.parametrize("provider", HTTP_PROVIDERS)
+def test_max_response_bytes_out_of_range_or_wrong_type_stops_startup(
+    tmp_path: Path, provider: dict[str, Any], value: Any, reason: str
+) -> None:
+    data = with_provider({**provider, "max_response_bytes": value})
+    error = error_for(env(write_json(tmp_path, data), CLOUD_KEY="test-key-value"))
+    assert error.variable == VAR
+    assert str(error) == f"{VAR}: providers.p.max_response_bytes: {reason}"
+
+
+def test_max_response_bytes_errors_never_contain_the_value(tmp_path: Path) -> None:
+    data = with_provider({**OLLAMA, "max_response_bytes": VALUE})
+    assert_clean(error_for(env(write_json(tmp_path, data))), VALUE)
+
+
+def test_max_response_bytes_is_not_allowed_on_mock(tmp_path: Path) -> None:
+    data = with_provider({"type": "mock", "max_response_bytes": 1_024})
+    error = error_for(env(write_json(tmp_path, data)))
+    assert str(error) == f"{VAR}: providers.p.max_response_bytes: is not allowed"
+
+
+def test_create_app_stops_at_startup_on_a_bad_max_response_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = with_provider({**OLLAMA, "max_response_bytes": 1_023})
+    for name, value in env(write_json(tmp_path, data)).items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SettingsError) as raised:
+        create_app()
+    assert str(raised.value) == f"{VAR}: providers.p.max_response_bytes: must be at least 1024"

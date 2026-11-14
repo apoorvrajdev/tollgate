@@ -122,10 +122,16 @@ authentication and are not treated as secrets by the gateway.
   visible ASCII characters (`!` to `~`): no space, control character, line break or non-ASCII character. A name
   that is not fails at startup with `TOLLGATE_ROUTES_FILE: providers: has a provider name that is not made only
   of visible ASCII characters (! to ~)`; the message never shows the name.
-- `type` is exactly `mock`, `ollama`, `openai` or `anthropic`. `base_url` and `timeout_seconds` (a whole number
-  from 5 to 600, default 60) are allowed for the three HTTP types, not for `mock`. `api_key_env` is required for
-  `openai` and `anthropic` and not allowed for the others. `default_max_tokens` (at least 1) is required for
-  `anthropic` and not allowed for the others.
+- `type` is exactly `mock`, `ollama`, `openai` or `anthropic`. `base_url`, `timeout_seconds` (a whole number
+  from 5 to 600, default 60) and `max_response_bytes` (a whole number from 1,024 to 67,108,864, default
+  8,388,608) are allowed for the three HTTP types, not for `mock`. `api_key_env` is required for `openai` and
+  `anthropic` and not allowed for the others. `default_max_tokens` (at least 1) is required for `anthropic` and
+  not allowed for the others.
+- `max_response_bytes` caps the body of a successful reply, counted after gzip or deflate is decoded. Reading
+  stops at the chunk that passes the limit; the client gets the 502, the route does not fall back to its next
+  target, and the request stays charged its reservation. Raise the value for that provider if its real replies
+  are larger. Memory can pass the limit by one decompressed chunk, and a compressed chunk of up to 64 KiB can
+  expand far beyond its size, so the cap bounds the body read, not exactly the memory used (ADR-0013).
 - A route, and `default`, has 1 to 5 targets, each a defined `provider` and an optional upstream `model`;
   without `model`, the client's model is passed through.
 - Keys never go in the file. `api_key_env` is the name of the environment variable that holds the key (letters,

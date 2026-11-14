@@ -159,7 +159,9 @@ def build_providers(
         elif isinstance(config, OllamaProviderConfig):
             client = build_http_client(config, http_transport)
             clients.append(client)
-            providers[name] = OllamaProvider(client, clock, id_source)
+            providers[name] = OllamaProvider(
+                client, clock, id_source, max_response_bytes=config.max_response_bytes
+            )
         else:
             field = format_path(["providers", name, "type"])
             built = ", ".join(BUILT_PROVIDER_TYPES)

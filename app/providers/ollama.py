@@ -2,7 +2,8 @@
 
 One attempt per call. Every failure it can classify is a `ProviderError` whose message holds only
 the kind and the HTTP status, never the response body (which can echo the prompt) or the URL. The
-status is read before the body, and the body of a non-2xx answer is never read.
+status is read before the body, and the body of a non-2xx answer is never read. A 2xx body is read
+in decoded chunks up to `max_response_bytes`, and a larger one is a bad response (ADR-0013).
 """
 
 import json
@@ -13,7 +14,9 @@ import httpx
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.clock import Clock
 from app.providers.errors import ProviderError
+from app.providers.http_body import read_capped
 from app.providers.ids import IdSource
+from app.routing.config import DEFAULT_MAX_RESPONSE_BYTES
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 CHAT_PATH = "/api/chat"
@@ -109,10 +112,18 @@ def _status_error(status: int) -> ProviderError:
 
 
 class OllamaProvider:
-    def __init__(self, client: httpx.AsyncClient, clock: Clock, id_source: IdSource) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        clock: Clock,
+        id_source: IdSource,
+        *,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    ) -> None:
         self._client = client
         self._clock = clock
         self._id_source = id_source
+        self._max_response_bytes = max_response_bytes
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
         status = 0
@@ -121,7 +132,7 @@ class OllamaProvider:
                 status = response.status_code
                 if not response.is_success:
                     raise _status_error(status)
-                content = await response.aread()
+                content = await read_capped(response, self._max_response_bytes)
         # httpx.TimeoutException is a subclass of httpx.TransportError, so it is checked first.
         except httpx.TimeoutException:
             raise ProviderError("timeout") from None

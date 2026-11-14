@@ -322,3 +322,52 @@ def test_without_a_transport_the_app_builds_real_clients_and_closes_them(tmp_pat
     with TestClient(app):  # nothing is sent, so no connection is made
         assert not http_client.is_closed
     assert http_client.is_closed
+
+
+# The reply size cap through the whole app (ADR-0013, T-209).
+
+CAP_BYTES = 1_024
+CAPPED_LOCAL = {**LOCAL, "max_response_bytes": CAP_BYTES}
+# The ADR-0008 502 body, written out so a change to it fails here too.
+BAD_GATEWAY_BODY = {
+    "error": {
+        "message": "The upstream provider failed to complete the request.",
+        "type": "api_error",
+        "param": None,
+        "code": "provider_error",
+    }
+}
+
+
+def padded_reply(size_bytes: int) -> bytes:
+    """A valid Ollama reply holding BODY_SENTINEL, padded with JSON whitespace to `size_bytes`."""
+    body = {**OLLAMA_BODY, "message": {"role": "assistant", "content": BODY_SENTINEL}}
+    data = json.dumps(body).encode("utf-8")
+    assert len(data) <= size_bytes
+    return data + b" " * (size_bytes - len(data))
+
+
+def test_an_ollama_200_above_max_response_bytes_is_a_502_that_does_not_fall_back_and_stays_charged(
+    tmp_path: Path,
+) -> None:
+    upstream = Upstream(lambda request: httpx.Response(200, content=padded_reply(CAP_BYTES + 1)))
+    app = make_app(tmp_path, upstream, providers_table(local=CAPPED_LOCAL))
+    with TestClient(app) as client:
+        response = post(client, "fallback")
+        follow_up = post(client, "solo")
+    assert response.status_code == 502
+    assert response.json() == BAD_GATEWAY_BODY
+    assert BODY_SENTINEL not in response.text + str(dict(response.headers))
+    assert "x-tollgate-provider" not in response.headers
+    assert len(upstream.requests) == 2  # the first request stopped at Ollama; so did the second
+    assert remaining(follow_up) == str(CAPACITY - RESERVED - RESERVED)
+
+
+def test_a_valid_reply_padded_to_exactly_max_response_bytes_is_served(tmp_path: Path) -> None:
+    upstream = Upstream(lambda request: httpx.Response(200, content=padded_reply(CAP_BYTES)))
+    app = make_app(tmp_path, upstream, providers_table(local=CAPPED_LOCAL))
+    with TestClient(app) as client:
+        response = post(client, "fallback")
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == BODY_SENTINEL
+    assert response.headers["x-tollgate-provider"] == "local"

@@ -7,7 +7,7 @@ import ast
 import asyncio
 import json
 import traceback
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -520,3 +520,98 @@ def test_the_adapter_does_not_import_the_mock() -> None:
             imported.update(alias.name for alias in node.names)
     assert "app.providers.mock" not in imported
     assert "app.providers.ids" in imported
+
+
+# The reply size cap (ADR-0013, T-209).
+
+CAP_BYTES = 1_024
+
+
+def padded(size_bytes: int, **overrides: Any) -> bytes:
+    """A valid reply padded with JSON whitespace to exactly `size_bytes`."""
+    body = json.dumps(ok_body(**overrides)).encode("utf-8")
+    assert len(body) <= size_bytes
+    return body + b" " * (size_bytes - len(body))
+
+
+def chunked(status: int, data: bytes, served: list[int], chunk_bytes: int = 256) -> Handler:
+    """A handler that streams `data` in chunks and records each chunk asked for in `served`."""
+
+    async def body() -> AsyncIterator[bytes]:
+        for index in range(0, len(data), chunk_bytes):
+            served.append(index // chunk_bytes)
+            yield data[index : index + chunk_bytes]
+
+    return lambda request: httpx.Response(status, content=body())
+
+
+def run_capped(handler: Handler, max_response_bytes: int) -> ChatResponse | ProviderError:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://ollama.test"
+    )
+    provider = OllamaProvider(
+        client, FakeClock(1000.0), FixedIdSource(FIXED_ID), max_response_bytes=max_response_bytes
+    )
+
+    async def go() -> ChatResponse | ProviderError:
+        try:
+            return await provider.complete(chat_request())
+        except ProviderError as error:
+            return error
+        finally:
+            await client.aclose()
+
+    return asyncio.run(go())
+
+
+def test_a_2xx_body_above_max_response_bytes_is_a_non_retryable_bad_response() -> None:
+    result = run_capped(
+        lambda request: httpx.Response(200, content=padded(CAP_BYTES + 1)), CAP_BYTES
+    )
+    assert isinstance(result, ProviderError), result
+    assert (result.kind, result.status_code, result.retryable) == ("bad_response", 200, False)
+
+
+def test_a_valid_body_padded_to_exactly_max_response_bytes_is_served() -> None:
+    result = run_capped(lambda request: httpx.Response(200, content=padded(CAP_BYTES)), CAP_BYTES)
+    assert isinstance(result, ChatResponse), result
+    assert result.choices[0].message.content == "hi there"
+
+
+@pytest.mark.parametrize(
+    ("status", "kind", "retryable"),
+    [(503, "upstream_status", True), (429, "rate_limited", True), (404, "upstream_status", False)],
+)
+def test_an_error_status_with_an_oversized_body_is_classified_by_status_and_never_read(
+    status: int, kind: str, retryable: bool
+) -> None:
+    served: list[int] = []
+    result = run_capped(chunked(status, b"x" * 2_000, served), CAP_BYTES)
+    assert isinstance(result, ProviderError), result
+    assert (result.kind, result.status_code, result.retryable) == (kind, status, retryable)
+    assert served == []
+
+
+def test_an_oversized_reply_shows_no_part_of_the_body() -> None:
+    data = padded(CAP_BYTES + 1, message={"role": "assistant", "content": BODY_SENTINEL})
+    result = run_capped(lambda request: httpx.Response(200, content=data), CAP_BYTES)
+    assert isinstance(result, ProviderError), result
+    text = str(result) + repr(result) + "".join(traceback.format_exception(result))
+    assert BODY_SENTINEL not in text
+    assert result.__cause__ is None
+    assert str(result) == "provider failed: bad_response (HTTP 200)"
+
+
+@pytest.mark.parametrize(
+    ("size_bytes", "served_ok"),
+    [(8_388_608, True), (8_388_609, False)],
+    ids=["8-mib", "8-mib-plus-1"],
+)
+def test_the_adapter_default_cap_is_8_mib(size_bytes: int, served_ok: bool) -> None:
+    data = padded(size_bytes)
+    result, _ = run(lambda request: httpx.Response(200, content=data))
+    if served_ok:
+        assert isinstance(result, ChatResponse), result
+    else:
+        assert isinstance(result, ProviderError), result
+        assert (result.kind, result.status_code) == ("bad_response", 200)
