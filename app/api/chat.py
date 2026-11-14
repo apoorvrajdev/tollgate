@@ -11,7 +11,9 @@ There is one reservation and one settle per request. A 200 settles with the usag
 that served it and names that target in `x-tollgate-provider`, with the failed attempts before it
 in `x-tollgate-fallbacks`. A route that ends without an answer gives the ADR-0008 502: a provider
 failure is refunded in full, but an answer that could not be translated (`bad_response`) stays
-charged as reserved, because the provider has probably billed it (ADR-0010).
+charged as reserved, because the provider has probably billed it (ADR-0010). A 200 settles the
+reported `total_tokens` capped at the bucket capacity (`decision.limit_tokens`, ADR-0012), so one
+request never charges more than a full bucket; the response's `usage` is the provider's, unchanged.
 
 The limit headers come from the Decision that `reserve` returned, so a 200 shows the balance after
 the reservation (made from the estimate) and a 502 shows the balance before the settle; the next
@@ -29,6 +31,7 @@ from app.api.auth import UNAUTHORIZED_RESPONSE, AuthenticatedRoute, CallerIdenti
 from app.api.errors import INVALID_REQUEST_ERROR, ErrorBody, ErrorResponse
 from app.api.limit_headers import LIMIT_HEADERS_OPENAPI, RETRY_AFTER_OPENAPI, limit_headers
 from app.api.models import ChatRequest, ChatResponse
+from app.limits.charge import charged_tokens
 from app.limits.estimate import TokenEstimator, reserved_tokens
 from app.limits.limiter import Decision, RateLimiter
 from app.providers.base import Provider
@@ -168,7 +171,8 @@ async def create_chat_completion(
             code=PROVIDER_ERROR_CODE,
         )
         return error_response(502, failure, headers)
-    await limiter.settle(key, requested_tokens, outcome.completion.usage.total_tokens)
+    settled_tokens = charged_tokens(outcome.completion.usage.total_tokens, decision.limit_tokens)
+    await limiter.settle(key, requested_tokens, settled_tokens)
     response.headers.update(headers)
     response.headers[PROVIDER_HEADER] = outcome.provider_name
     response.headers[FALLBACKS_HEADER] = str(outcome.fallbacks)
