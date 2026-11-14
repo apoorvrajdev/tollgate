@@ -5,7 +5,7 @@ The app is built on a route file in tmp_path and an `httpx.MockTransport`: no ne
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -57,10 +57,11 @@ def make_app(
     table: dict[str, Any] | None = None,
     *,
     transport: bool = True,
+    limits: Mapping[str, str] = LIMIT_SETTINGS,
 ) -> FastAPI:
     path = tmp_path / "routes.json"
     path.write_text(json.dumps(table or providers_table(local=LOCAL)), encoding="utf-8")
-    settings = make_settings(**LIMIT_SETTINGS, TOLLGATE_ROUTES_FILE=str(path))
+    settings = make_settings(**limits, TOLLGATE_ROUTES_FILE=str(path))
     resolved = (
         handler if isinstance(handler, httpx.AsyncBaseTransport) else httpx.MockTransport(handler)
     )
@@ -121,6 +122,28 @@ def test_a_follow_up_shows_the_balance_settled_with_ollamas_usage(tmp_path: Path
         follow_up = post(client, "solo")
     # 1000 - 12 (7 + 5 from Ollama) - 11 reserved by the follow-up.
     assert remaining(follow_up) == str(CAPACITY - 12 - RESERVED)
+
+
+def test_an_ollama_count_above_the_capacity_is_returned_and_charges_one_full_bucket(
+    tmp_path: Path,
+) -> None:
+    # T-208: at 60 tokens per minute (1 per second) an uncapped charge would leave the balance
+    # far below 0; capped at the capacity it is exactly 0, so the follow-up waits its own 11 s.
+    limits = {"TOLLGATE_TOKENS_PER_MINUTE": "60", "TOLLGATE_CAPACITY_TOKENS": "60"}
+    upstream = answering(body={**OLLAMA_BODY, "prompt_eval_count": 10**30, "eval_count": 5})
+    with TestClient(make_app(tmp_path, upstream, limits=limits)) as client:
+        response = post(client, "solo")
+        follow_up = post(client, "solo")
+    assert response.status_code == 200
+    assert response.headers["x-tollgate-provider"] == "local"
+    assert response.json()["usage"] == {
+        "prompt_tokens": 10**30,
+        "completion_tokens": 5,
+        "total_tokens": 10**30 + 5,
+    }
+    assert follow_up.status_code == 429
+    assert remaining(follow_up) == "0"
+    assert follow_up.headers["retry-after"] == str(RESERVED)
 
 
 # Criterion 5 and 3: fallback, and what each failure costs.
