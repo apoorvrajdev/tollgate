@@ -615,3 +615,70 @@ def test_the_adapter_default_cap_is_8_mib(size_bytes: int, served_ok: bool) -> N
     else:
         assert isinstance(result, ProviderError), result
         assert (result.kind, result.status_code) == ("bad_response", 200)
+
+
+# T-210: every failure is raised outside an `except` block, so it has no `__context__` or
+# `__cause__` (an httpx error or a decoding error can hold the reply, which can echo the prompt).
+
+
+def _failing_mid_body(error: Exception) -> Handler:
+    async def body() -> AsyncIterator[bytes]:
+        yield b"{"
+        raise error
+
+    return lambda request: httpx.Response(200, content=body())
+
+
+def _raising(error: Exception) -> Handler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    return handler
+
+
+OVERSIZE_LIMIT_BYTES = 256
+
+FAILURES_WITHOUT_CONTEXT: dict[str, Handler] = {
+    "connect-timeout": _raising(httpx.ConnectTimeout(BODY_SENTINEL)),
+    "read-timeout-mid-body": _failing_mid_body(httpx.ReadTimeout(BODY_SENTINEL)),
+    "connection-error": _raising(httpx.ConnectError(BODY_SENTINEL)),
+    "corrupt-gzip": lambda request: httpx.Response(
+        200, headers={"content-encoding": "gzip"}, content=BODY_SENTINEL.encode()
+    ),
+    "invalid-json": lambda request: httpx.Response(200, content=BODY_SENTINEL.encode()),
+    "lone-surrogate-in-content": lambda request: httpx.Response(200, content=OK_SURROGATE_CONTENT),
+    "lone-surrogate-in-model": lambda request: httpx.Response(200, content=OK_SURROGATE_MODEL),
+    "body-above-the-limit": lambda request: httpx.Response(
+        200, content=b'"' + BODY_SENTINEL.encode() * OVERSIZE_LIMIT_BYTES + b'"'
+    ),
+    "status-429": lambda request: httpx.Response(429, content=BODY_SENTINEL.encode()),
+    "status-503": lambda request: httpx.Response(503, content=BODY_SENTINEL.encode()),
+}
+
+
+@pytest.mark.parametrize("name", list(FAILURES_WITHOUT_CONTEXT))
+def test_every_ollama_failure_is_a_provider_error_with_no_context_and_no_cause(name: str) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(FAILURES_WITHOUT_CONTEXT[name]),
+        base_url="http://ollama.test",
+    )
+    provider = OllamaProvider(
+        client,
+        FakeClock(1000.0),
+        FixedIdSource(FIXED_ID),
+        max_response_bytes=OVERSIZE_LIMIT_BYTES,
+    )
+
+    async def go() -> ProviderError:
+        try:
+            await provider.complete(chat_request())
+        except ProviderError as error:
+            return error
+        finally:
+            await client.aclose()
+        raise AssertionError("the call did not fail")
+
+    error = asyncio.run(go())
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    assert BODY_SENTINEL not in "".join(traceback.format_exception(error))
