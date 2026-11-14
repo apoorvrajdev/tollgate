@@ -30,6 +30,7 @@ request, as for Phase 1.
       tested through `httpx.MockTransport` only; no provider SDK is a dependency
 - [x] ADR-0012 accepted or revised, and the status line of ADR-0007 updated to name it (accepted as written,
       2026-11-14)
+- [ ] ADR-0013 accepted or revised, and the status line of ADR-0010 updated to name it
 - [ ] The app closes the HTTP and Redis clients it builds when it shuts down
 - [ ] Tests use no network and no paid API (the CI Redis container excepted, ADR-0006). A real provider is
       called only by the owner, by hand, and the owner's run against a local Ollama is recorded in the Log or
@@ -79,8 +80,8 @@ No gateway features yet. The owner signed off the gate on 2026-11-12, and Phase 
 
 Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
 T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-204,
-then T-208 (added 2026-11-14), then T-205 to T-207. The rows below are in delivery order; the cards further down
-are listed by ID.
+then T-208 and T-209 (both added 2026-11-14), then T-205 to T-207. The rows below are in delivery order; the
+cards further down are listed by ID.
 
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -102,8 +103,9 @@ are listed by ID.
 | T-203 | Close the clients the app builds on shutdown, and check provider names | 2 | done | T-202 |
 | T-204 | Ollama adapter | 2 | done | T-203 |
 | T-208 | Cap what `settle` charges | 2 | todo | T-204; ADR-0012 accepted 2026-11-14 |
-| T-205 | OpenAI adapter | 2 | todo | T-204, T-208 |
-| T-206 | Anthropic adapter | 2 | todo | T-204, T-208 |
+| T-209 | Cap the size of a provider reply | 2 | todo | T-204; ADR-0013 accepted |
+| T-205 | OpenAI adapter | 2 | todo | T-204, T-208, T-209 |
+| T-206 | Anthropic adapter | 2 | todo | T-204, T-208, T-209 |
 | T-207 | Real-provider guide and the owner's Ollama run | 2 | todo | T-204, T-205, T-206 |
 
 ---
@@ -802,9 +804,10 @@ are listed by ID.
 - **Status:** todo
 - **Goal:** a route can be served by OpenAI chat completions, tested only with `httpx.MockTransport`.
 - **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
-- **Depends on:** T-204 and T-208: a provider's reported usage must be bounded before `settle` (owner
-  decision, T-204 review), so this task does not start until T-208 is `done`, or the owner records that it is
-  waived.
+- **Depends on:** T-204, T-208 and T-209: a provider's reported usage must be bounded before `settle` (owner
+  decision, T-204 review), and its reply must be read with a size cap (owner decision, 2026-11-14), so this task
+  does not start until T-208 and T-209 are `done`, or the owner records that either is waived. The adapter reads
+  a 2xx body with `read_capped` and its provider's `max_response_bytes` (ADR-0013).
 - **Deliverables:**
   - `app/providers/openai.py`: `OpenAIProvider(client, api_key)` posting to `/v1/chat/completions` (default
     base URL `https://api.openai.com`) with `Authorization: Bearer <key>`, by the ADR-0010 rules. The registry
@@ -835,9 +838,10 @@ are listed by ID.
 - **Status:** todo
 - **Goal:** a route can be served by the Anthropic Messages API, tested only with `httpx.MockTransport`.
 - **Context:** ADR-0010, `app/providers/`, `app/main.py`, the T-204 adapter as the pattern.
-- **Depends on:** T-204 and T-208: a provider's reported usage must be bounded before `settle` (owner
-  decision, T-204 review), so this task does not start until T-208 is `done`, or the owner records that it is
-  waived.
+- **Depends on:** T-204, T-208 and T-209: a provider's reported usage must be bounded before `settle` (owner
+  decision, T-204 review), and its reply must be read with a size cap (owner decision, 2026-11-14), so this task
+  does not start until T-208 and T-209 are `done`, or the owner records that either is waived. The adapter reads
+  a 2xx body with `read_capped` and its provider's `max_response_bytes` (ADR-0013).
 - **Deliverables:**
   - `app/providers/anthropic.py`: `AnthropicProvider(client, api_key, default_max_tokens, clock, id_source)`
     posting to `/v1/messages` (default base URL `https://api.anthropic.com`) with `x-api-key`,
@@ -954,6 +958,56 @@ are listed by ID.
   app tests and the ARCHITECTURE sentence), `docs(tasks): complete T-208`.
 - **Size:** about 150 lines, mostly tests.
 
+### T-209 - Cap the size of a provider reply
+
+- **Status:** todo
+- **Goal:** no provider reply can make the gateway hold an unbounded body in memory. A 2xx body above the
+  provider's `max_response_bytes` is a `bad_response`, read no further than the chunk that passes the limit
+  (ADR-0013).
+- **Context:** ADR-0010, ADR-0013, `app/providers/ollama.py`, `app/routing/config.py` (`_HttpProviderConfig`),
+  `app/main.py` (`build_providers`), `tests/test_ollama_provider.py`, `tests/test_app_ollama.py`,
+  `tests/test_route_table.py`, `docs/setup.md` (the route file fields), the T-204 Log row (known gap 3).
+- **Depends on:** T-204; ADR-0013 accepted. Delivered after T-208 and before T-205 and T-206.
+- **Deliverables:**
+  - `app/routing/config.py`: `max_response_bytes` on `_HttpProviderConfig` (so on `ollama`, `openai` and
+    `anthropic`), a whole number from 1,024 to 67,108,864, default 8,388,608, with named constants.
+  - `app/providers/http_body.py`: `async def read_capped(response: httpx.Response, max_response_bytes: int) ->
+    bytes`, which adds up the chunks of `response.aiter_bytes()`, raises `ProviderError("bad_response",
+    response.status_code)` as soon as the total is above the limit, and otherwise returns the joined body.
+  - `app/providers/ollama.py`: `OllamaProvider` takes `max_response_bytes` and reads a 2xx body with
+    `read_capped` instead of `aread()`; `build_providers` passes the provider's configured value. The status is
+    still read first and a non-2xx body is never read.
+  - `docs/setup.md`: the field, its bounds and default, and what an oversized reply costs. `docs/ARCHITECTURE.md`:
+    `http_body.py` in the `app/providers/` layout.
+- **Contract:** unchanged. No response, header or field is added, and the snapshot does not change.
+- **Acceptance criteria:**
+  1. `read_capped`, through an `httpx.MockTransport` whose body is an async generator of chunks: a body of
+     exactly the limit, the limit minus 1, and 0 bytes is returned unchanged; a body of the limit plus 1 is
+     `bad_response` with the reply's status. The total spans chunks: a limit crossed in the third of five chunks
+     raises, and the generator was asked for no chunk after the third.
+  2. The count is of decoded bytes: a gzip-encoded body (`Content-Encoding: gzip`) whose compressed size is below
+     the limit and whose decoded size is the limit plus 1 is `bad_response`, and one whose decoded size is exactly
+     the limit is returned decoded.
+  3. The route table: `max_response_bytes` defaults to 8,388,608 on each of `ollama`, `openai` and `anthropic`;
+     1,024 and 67,108,864 are accepted; 1,023, 67,108,865, `true`, `1024.0` and `"1024"` stop startup with a
+     `SettingsError` naming `TOLLGATE_ROUTES_FILE` and the field path, never the value; it is rejected on `mock`.
+  4. Through the whole app with an Ollama route whose `max_response_bytes` is 1,024: a 200 body of 1,025 bytes
+     gives the ADR-0008 502 with no byte of the body in the response, does not fall back to the route's next
+     target, and stays charged as reserved (a follow-up shows the balance less two reservations); a valid body
+     padded with JSON whitespace to exactly 1,024 bytes gives a 200.
+  5. Every existing test passes unchanged, and the OpenAPI snapshot is unchanged.
+- **Verification:** `python scripts/check.py` green; mutation table, listed before the first run: the cap
+  removed (`aread()` restored); `>=` in place of `>` at the limit; the limit plus 1 and minus 1; the encoded
+  count (`aiter_raw()` or `num_bytes_downloaded`) in place of the decoded one; the whole body read before the
+  check (`len(await response.aread())`); the configured value ignored (the default always used); the default,
+  the lower bound and the upper bound each off by one; an oversized reply classified as retryable; an oversized
+  reply refunded instead of charged; the body read before the status; the message holding part of the body;
+  `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-209-reply-size-cap`; `feat(routing): add max_response_bytes to the HTTP
+  providers` (the field and its route table tests), `feat(providers): cap the size of an HTTP provider reply`
+  (the helper, the Ollama adapter, their tests and the docs), `docs(tasks): complete T-209`.
+- **Size:** about 200 lines, mostly tests.
+
 ## Later phases (broken into tasks at each gate)
 
 | Phase | Epic |
@@ -1013,11 +1067,6 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   (pinned by a test in T-204). A startup check would name `TOLLGATE_ROUTES_FILE` and the field path, never the
   value, since the value can hold credentials, and would decide whether an empty string is rejected (T-204 plan
   review, owner decision to log it).
-- **Cap the size of a provider reply:** the HTTP adapters read the whole reply body with no limit, which T-204
-  accepted for a local Ollama (T-204 known gap 3; T-208 bounds only the usage count that is settled). Remote
-  providers (T-205, T-206) reuse the same client, so decide before them: a maximum body size, where it is
-  enforced (while streaming the body, not after reading it), and how an oversized reply is classified
-  (probably `bad_response`, charged as reserved, ADR-0010).
 - **IETF RateLimit header fields:** emit `RateLimit` and `RateLimit-Policy` alongside the `x-ratelimit-*`
   headers once draft-ietf-httpapi-ratelimit-headers becomes an RFC and has a unit for tokens (ADR-0008).
 
@@ -1069,3 +1118,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-14 | T-204 | The Ollama adapter is built. `app/providers/ollama.py` (`OllamaProvider(client, clock, id_source)`) posts `POST /api/chat` with exactly `model`, `messages` (role and content only), `"stream": false` and, only when given, `options.num_predict` (from `max_completion_tokens`, else `max_tokens`) and `options.temperature` (0.0 is sent); `name`, `user` and `n` are not sent. A reply must be a JSON object with a `message` object holding a string `content`, a non-empty string `model` and a `done_reason` of exactly `stop` or `length`; `prompt_eval_count` and `eval_count` are 0 when absent, and must otherwise be whole numbers of at least 0 (a bool, a float, `NaN`, `Infinity`, a string or null is a `bad_response`); `id` and `created` come from the injected sources (never the body) and the output role is always `assistant`. Failures are `ProviderError`s whose message holds only the kind and the status: a timeout (checked before the other `httpx.TransportError`s) and a connection error, both retryable; 429 `rate_limited`; any other non-2xx `upstream_status`, retryable from 500 only; an undecodable, empty or untranslatable 2xx `bad_response` with its status. The response is streamed so the body of a non-2xx answer is never read, and redirects are not followed. `create_app()` gains `http_transport=` and builds one `httpx.AsyncClient` per `ollama` provider (base URL, default `http://localhost:11434`; 5 seconds to connect and `timeout_seconds` for reads, writes and the pool, per ADR-0010) on `app.state.owned_clients`, so T-203's lifespan closes them; `build_providers` now returns a `ProvidersBuild` like the limiter's `LimiterBuild`. `httpx`, `httpcore` and `certifi` moved from `requirements-dev.txt` to `requirements.txt` and `httpx>=0.28.1` to the runtime dependencies in `pyproject.toml`: the union of the two files is identical to `main`'s, and fresh Windows venvs for both files installed with `--only-binary=:all:` with a clean `pip check` and a freeze equal to the union (the Linux install is shown only by CI). `IdSource` and `UuidIdSource` moved to `app/providers/ids.py`; a test checks the adapter does not import the mock. The contract is unchanged. `scripts/check.py` passed: 14 contract and 1052 other tests, 45 deselected. The change is 1,063 added lines (215 in `app/`, 826 in tests, the rest requirements and docs) in 14 files, against about 350 planned for the code; the owner approved the full size at plan review because the card's figure counts only production code. Mutation check on scratch copies, one mutant at a time with a timeout: 74 mutants (the card's 13 as 29 variants, and 45 more: temperature by truthiness, options sent empty, `user` or `n` forwarded, each of read, write and pool and the connect timeout changed, one client shared or the transport not passed, a wrong or ignored default `base_url`, a bool or a negative or zero count accepted, the model or either lone-surrogate check dropped, the 2xx test `== 200`, `< 300`, `<= 300`, `>= 300` or `< 400`, the 429 branch dropped, `DecodingError` unhandled, a non-2xx body read, redirects followed per request or on the client, UTF-8 decoding removed, each shape check dropped, the status of a `bad_response` 0 or None, an unbuilt type, a client built for a mock, the mock imported, a 204 as `upstream_status`, the role taken from the reply). Round one caught 65 of 70 and left five survivors: `base_url` with `is None` instead of `or`, the surrogate check missing for `model` only, a 1xx status accepted as success, redirects followed per request, and the output role taken from the reply. Round two killed those and added five mutants, one of which survived: `follow_redirects=True` on the app's client, because the redirect test used its own client; a whole-app redirect test kills it (the final mutant was run by hand on a scratch copy, and the full check passed on the final tree). No equivalent mutant is claimed. Two feedback iterations. Reviewer APPROVE with eight Minor findings, five applied (the client order in `ARCHITECTURE.md`, stale comments in `app/main.py`, a note on credentials in `base_url`, a working-directory-independent path in a test, and the `NaN`, `Infinity` and surrogate cases), the rest below | Verifier tables, rounds one and two; `check.py` output; `gh pr checks` is recorded in the pull request |
 | 2026-11-14 | T-204 | Known gaps and decisions. (1) A bad `base_url` is not checked at startup: a malformed one raises `httpx.InvalidURL` or `UnsupportedProtocol` at the first request, which `run_route` turns into a 502 with a full refund and no fallback (an unclassified exception) or a retryable `connection` error; an empty string counts as not given and uses the default host, which a test pins; the owner logged startup validation as a backlog item. (2) Credentials in `base_url` become HTTP Basic authentication and are kept as plain text in the route file and in `OllamaProviderConfig`, so a repr of the route table would show them; no message, header or log line does (tested for errors and the 502), and `docs/setup.md` says the gateway does not treat them as secrets. (3) The reply is read whole with no size cap, which suits a local Ollama; a count such as `10**30` is accepted and returned in `usage`, and nothing between the adapter and `settle` bounds it. The Redis limiter clamps the charge to its debt floor (`test_charges_stop_at_the_debt_floor_exactly` covers `10**30` at the limiter level; no test goes through the adapter or the app), so the stored balance stays valid, but the key is then in the deepest debt and refused for years (about 238 years at 600 tokens per minute, with the key's expiry set to match); the in-memory limiter has no floor and holds exactly -10**30 tokens, with a `Retry-After` of 29 digits. The owner logged a cap on what `settle` charges as a backlog item, to land before T-205. (4) A startup `SettingsError` after an Ollama client was built leaves that unopened client unclosed, which is harmless; the provider clients are appended before the Redis client, so Redis closes first. (5) `provider=` and `providers=` overrides keep the client built for that name, and the table stays the source of truth. (6) Criterion 6 for CI (the Linux install of the moved requirements) is shown only by the pull request's `lint and test` run, and CI never installs `requirements.txt` alone. T-205 and T-206 reuse `build_http_client` and the owned-client list | Reviewer and verifier findings; plan review |
 | 2026-11-14 | - | T-208 planned from the backlog item "Cap what `settle` charges", which it replaces; ADR-0012 proposed (cap a 200's charge at the bucket capacity, `limit_tokens` on the reserve decision, amending ADR-0007). The backlog's example, a multiple of the reservation, was not chosen: a request with no max field reserves only its input estimate (7 tokens for one user message of `hi`), so any small multiple undercharges ordinary answers. T-205 and T-206 now depend on T-208, which is delivered after T-204; the Phase 2 gate gains the ADR-0012 item. The owner accepted ADR-0012 as written the same day, and ADR-0007's status now names it | `docs/DECISIONS.md`; this planning pull request |
+| 2026-11-14 | - | T-209 planned from the backlog item "Cap the size of a provider reply", logged the same day from T-204 known gap 3 (the part T-208 does not close), which it replaces; ADR-0013 proposed (a `max_response_bytes` field on every HTTP provider, default 8 MiB, bounds 1 KiB to 64 MiB, counted over the decoded body while it streams, an oversized reply a `bad_response`, amending ADR-0010). By the owner's decision T-205 and T-206 now depend on T-209 as well as T-208, and the Phase 2 gate gains the ADR-0013 item. Research checked on this date against the installed `httpx` 0.28.1 and `httpcore` 1.0.9 and their documentation: no body size option; `aiter_bytes()` counts decoded bytes and `num_bytes_downloaded` encoded ones; gzip and deflate decode a whole raw chunk of up to 64 KiB at once; `MockTransport` streams an async-iterator body one part at a time. Neither OpenAI nor Anthropic documents a maximum response size. The limit values are chosen, not measured. Nothing was installed | `docs/DECISIONS.md`; this planning pull request |
