@@ -1,0 +1,18 @@
+{
+  "providers": {
+    "local": {"type": "ollama", "base_url": "http://localhost:11434", "timeout_seconds": 60},
+    "openai": {"type": "openai", "api_key_env": "OPENAI_API_KEY"},
+    "claude": {"type": "anthropic", "api_key_env": "ANTHROPIC_API_KEY", "default_max_tokens": 1024}
+  },
+  "routes": {
+    "fast": [
+      {"provider": "local", "model": "llama3.2"},
+      {"provider": "openai", "model": "gpt-4o-mini"}
+    ],
+    "smart": [
+      {"provider": "claude", "model": "claude-sonnet-4-5"},
+      {"provider": "openai", "model": "gpt-4o"}
+    ]
+  },
+  "default": [{"provider": "local", "model": "llama3.2"}]
+}
