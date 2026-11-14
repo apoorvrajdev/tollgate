@@ -1013,6 +1013,11 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   (pinned by a test in T-204). A startup check would name `TOLLGATE_ROUTES_FILE` and the field path, never the
   value, since the value can hold credentials, and would decide whether an empty string is rejected (T-204 plan
   review, owner decision to log it).
+- **Cap the size of a provider reply:** the HTTP adapters read the whole reply body with no limit, which T-204
+  accepted for a local Ollama (T-204 known gap 3; T-208 bounds only the usage count that is settled). Remote
+  providers (T-205, T-206) reuse the same client, so decide before them: a maximum body size, where it is
+  enforced (while streaming the body, not after reading it), and how an oversized reply is classified
+  (probably `bad_response`, charged as reserved, ADR-0010).
 - **IETF RateLimit header fields:** emit `RateLimit` and `RateLimit-Policy` alongside the `x-ratelimit-*`
   headers once draft-ietf-httpapi-ratelimit-headers becomes an RFC and has a unit for tokens (ADR-0008).
 
