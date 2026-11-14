@@ -12,7 +12,7 @@ scripted fakes that report the model "reported-2" (or "reported") and 20 + 17 = 
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -20,12 +20,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.models import ChatRequest
-from app.main import create_app
+from app.main import build_providers, create_app
+from app.providers.anthropic import AnthropicProvider
 from app.providers.errors import ProviderError, ProviderErrorKind
 from app.providers.mock import MockProvider
-from app.routing.config import TargetConfig
+from app.providers.ollama import OllamaProvider
+from app.providers.openai import OpenAIProvider
+from app.routing.config import PROVIDER_TYPES, RouteTable, TargetConfig
 from app.routing.router import Route
-from app.settings import SettingsError
 from tests.fakes import AUTH_HEADERS, FakeClock, FixedIdSource, ScriptedProvider, make_settings
 from tests.test_chat_rate_limits import CALLER_ID, RecordingLimiter
 
@@ -309,19 +311,33 @@ def test_without_a_route_file_each_200_names_mock_and_zero_fallbacks(injected: b
     assert response.json()["model"] == "mock-1"
 
 
-# Criterion 7: a provider type that is not built yet.
+# Every provider type in the route table is built (T-206; it replaced T-202 criterion 7, the
+# startup error for a type not built yet, which mypy now proves unreachable).
 
-UNBUILT: list[tuple[str, dict[str, Any]]] = [
+BUILT: list[tuple[str, dict[str, Any], type[Any]]] = [
+    ("mock", {"type": "mock"}, MockProvider),
+    ("ollama", {"type": "ollama"}, OllamaProvider),
+    ("openai", {"type": "openai", "api_key_env": "SENTINEL_KEY_VAR"}, OpenAIProvider),
     (
         "anthropic",
         {"type": "anthropic", "api_key_env": "SENTINEL_KEY_VAR", "default_max_tokens": 1024},
+        AnthropicProvider,
     ),
 ]
 
 
-@pytest.mark.parametrize("config", [case[1] for case in UNBUILT], ids=[case[0] for case in UNBUILT])
-def test_route_file_with_an_unbuilt_provider_type_fails_startup_naming_the_variable(
-    tmp_path: Path, config: dict[str, Any]
+def test_the_built_list_names_every_route_table_provider_type() -> None:
+    assert [case[0] for case in BUILT] == ["mock", "ollama", "openai", "anthropic"]
+    assert PROVIDER_TYPES == ("mock", "ollama", "openai", "anthropic")
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [(case[1], case[2]) for case in BUILT],
+    ids=[case[0] for case in BUILT],
+)
+def test_every_route_table_provider_type_is_built(
+    tmp_path: Path, config: dict[str, Any], expected: type[Any]
 ) -> None:
     path = tmp_path / "routes.json"
     data = {"providers": {"real": config, "test": {"type": "mock"}}, "routes": {}}
@@ -329,16 +345,18 @@ def test_route_file_with_an_unbuilt_provider_type_fails_startup_naming_the_varia
     settings = make_settings(
         TOLLGATE_ROUTES_FILE=str(path), SENTINEL_KEY_VAR="SENTINEL-provider-key"
     )
-    # An injected provider for the same name does not skip the check.
-    with pytest.raises(SettingsError) as raised:
-        create_app(settings, FakeClock(), providers={"real": ScriptedProvider("real")})
-    assert raised.value.variable == "TOLLGATE_ROUTES_FILE"
-    message = str(raised.value)
-    assert message == (
-        "TOLLGATE_ROUTES_FILE: providers.real.type: is not built yet;"
-        " built types: mock, ollama, openai"
-    )
-    assert "SENTINEL" not in message
+    registry = create_app(settings, FakeClock()).state.providers
+    assert set(registry) == {"real", "test"}
+    assert type(registry["real"]) is expected
+    assert type(registry["test"]) is MockProvider
+
+
+def test_a_config_of_no_known_type_reaches_assert_never_in_the_registry() -> None:
+    # Unreachable through a validated table; mypy proves every type has a branch. This pins that
+    # the guard is assert_never, not a raise that could hide a missing branch from mypy.
+    table = RouteTable(providers=cast(Any, {"odd": object()}), routes={}, default=None, api_keys={})
+    with pytest.raises(AssertionError):
+        build_providers(table, FakeClock())
 
 
 # The registry.

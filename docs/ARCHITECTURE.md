@@ -121,10 +121,10 @@ Package layout inside `app/` is decided per phase. Current: `app/api/` (request 
 body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
 `app/providers/` (the `Provider` protocol, `MockProvider`, `ProviderError` with its failure kinds in
 `errors.py`, the Ollama adapter `OllamaProvider` in `ollama.py`, the OpenAI adapter `OpenAIProvider` in
-`openai.py`, and `http_body.py`: `read_capped`, which reads
-a 2xx body in decoded chunks up to the provider's `max_response_bytes`, ADR-0013), `app/routing/` (`config.py`:
-the route table file, validated when the settings are read, and the built-in table; `router.py`: `Route`,
-`Router`, `TableRouter` and `run_route`, the ordered fallback loop),
+`openai.py`, the Anthropic adapter `AnthropicProvider` in `anthropic.py`, and `http_body.py`: `read_capped`,
+which reads a 2xx body in decoded chunks up to the provider's `max_response_bytes`, ADR-0013), `app/routing/`
+(`config.py`: the route table file, validated when the settings are read, and the built-in table;
+`router.py`: `Route`, `Router`, `TableRouter` and `run_route`, the ordered fallback loop),
 `app/limits/` (the token estimator, the `RateLimiter` interface, `charge.py` (`charged_tokens`: the settle
 charge capped at the bucket capacity, ADR-0012), the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
@@ -144,12 +144,13 @@ client built from the URL; an injected client is the caller's) is appended to `a
 list at shutdown, last built first. A close that raises does not stop the others; once all have been tried the
 errors are raised together as an `ExceptionGroup`, so a failure is never hidden. It also builds the provider
 registry (provider name to `Provider`: a `MockProvider` per `mock` entry, an `OllamaProvider` per `ollama`
-entry, the mock and Ollama ones on the injected clock, and an `OpenAIProvider` per `openai` entry with the key
-read from its `api_key_env`; the HTTP ones each on their own client with the ADR-0010 timeouts, their
+entry, an `OpenAIProvider` per `openai` entry with the key read from its `api_key_env`, and an
+`AnthropicProvider` per `anthropic` entry with its key and `default_max_tokens`; the mock, Ollama and Anthropic
+ones on the injected clock and one shared id source; the HTTP ones each on their own client with the ADR-0010 timeouts, their
 provider's default base URL when `base_url` is absent or empty, their `max_response_bytes` and the
 `http_transport=` keyword's transport, which tests set to an
-`httpx.MockTransport`; any type not built yet
-stops startup with a `SettingsError` on `TOLLGATE_ROUTES_FILE`) and a `TableRouter` on the route table, kept on
+`httpx.MockTransport`; every route table type has a branch, which mypy checks through `assert_never`) and a
+`TableRouter` on the route table, kept on
 `app.state.providers` and `app.state.router`. The `provider=` keyword sets the entry named `mock` and
 `providers=` then sets entries by name; an entry the route table does not name is never routed to. The chat route reads the registry, the router and the
 limiter from `app.state` on every request. It selects the route first, answering a model that no route
