@@ -16,9 +16,10 @@ Accepted decisions change only through a new ADR.
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 and ADR-0012 | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
-| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted | 2026-11-13 |
+| [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted - amended by ADR-0013 | 2026-11-13 |
 | [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
 | [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
+| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted | 2026-11-14 |
 
 ---
 
@@ -308,7 +309,7 @@ ADR-0011 · 2026-11-12
 ## ADR-0010
 
 **Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008)** ·
-Accepted · 2026-11-13
+Accepted - amended by ADR-0013 · 2026-11-13
 
 - **Context:** ADR-0004 adds providers in a fixed order (mock, Ollama, OpenAI, Anthropic) and allows only the
   mock or recorded fakes in tests. ADR-0007 said `tiktoken` would be reconsidered when the first real adapter
@@ -374,7 +375,7 @@ Accepted · 2026-11-13
     | `timeout` | the configured timeout passed (`httpx.TimeoutException`) | yes |
     | `rate_limited` | upstream 429 | yes |
     | `upstream_status` | any other non-2xx; retryable only when 500 or above, including 529 | 5xx only |
-    | `bad_response` | a 2xx that cannot be translated: a body that cannot be decoded (`httpx.DecodingError`) or is not valid JSON, a missing field, an unknown finish reason, a negative or missing token count | no |
+    | `bad_response` | a 2xx that cannot be translated: a body that cannot be decoded (`httpx.DecodingError`) or is not valid JSON, a missing field, an unknown finish reason, a negative or missing token count, a body above the provider's `max_response_bytes` (ADR-0013) | no |
 
     `httpx.TimeoutException` is a subclass of `httpx.TransportError`, so an adapter checks for a timeout first.
     Messages carry only the kind and the HTTP status. They never carry a response body, which can echo the
@@ -540,6 +541,72 @@ Accepted · 2026-11-13
   - ADR-0007's sentence "The provider's usage figures are trusted" holds up to the capacity. ADR-0007's status
     is "Accepted - amended by ADR-0010 and ADR-0012". Delivered by T-208. Accepted by the owner as written on
     2026-11-14.
+
+## ADR-0013
+
+**Cap the size of a provider reply (amends ADR-0010)** · Accepted · 2026-11-14
+
+- **Context:** The Ollama adapter (T-204) opens the reply with `client.stream` and reads it whole with
+  `response.aread()`, which joins every decoded chunk in memory, so a 2xx body of any size is held in full before
+  it is parsed. T-204 accepted this for a local Ollama (its known gap 3). The OpenAI and Anthropic adapters
+  (T-205, T-206) will read replies from remote services in the same way. Checked on 2026-11-14 against the
+  installed `httpx` 0.28.1 and `httpcore` 1.0.9 and their documentation:
+  - httpx has no maximum body size option: the `Client` and `AsyncClient` API lists none, and a non-streaming
+    `post` calls `aread()` before it returns (`httpx/_client.py`, `httpx/_models.py`, tag 0.28.1;
+    <https://www.python-httpx.org/api/>).
+  - `Response.aiter_bytes()` yields the decoded content: each raw chunk goes through the `Content-Encoding`
+    decoder (gzip and deflate; br and zstd only when `brotli` or `zstandard` is installed, and neither is), so a
+    count over it counts decompressed bytes. `aiter_raw()` and `num_bytes_downloaded` count the encoded bytes
+    (<https://www.python-httpx.org/quickstart/>, <https://www.python-httpx.org/async/>, `httpx/_decoders.py`).
+  - The gzip and deflate decoders decompress a whole raw chunk at once, with no output bound, and `httpcore` reads
+    at most 64 KiB per chunk (`httpcore/_async/http11.py`, `READ_NUM_BYTES`), so memory can pass a decoded-byte
+    limit by one decompressed chunk.
+  - Leaving `async with client.stream(...)` closes the response without reading the rest; on HTTP/1.1 an
+    unfinished response closes its connection instead of returning it to the pool (`httpx/_client.py`,
+    `httpcore/_async/http11.py`).
+  - `httpx.MockTransport` returns the handler's `Response` unchanged. A `bytes` body is read in the constructor
+    and served as one chunk; an async iterator of bytes is streamed one part per item with `Transfer-Encoding:
+    chunked` (`httpx/_transports/mock.py`, `httpx/_content.py`), so a test can show where reading stops.
+  - Neither OpenAI's chat completions reference nor Anthropic's API overview documents a maximum response size;
+    OpenAI bounds the reply in tokens (`max_completion_tokens`), and Anthropic documents request size limits only
+    (<https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create>,
+    <https://platform.claude.com/docs/en/api/overview>, both seen 2026-11-14).
+- **Options:**
+  - Where the limit is set: (a) one constant for every provider; (b) a `max_response_bytes` field on every HTTP
+    provider in the route table, with a default and bounds, like `timeout_seconds`; (c) an environment variable
+    for the whole gateway.
+  - What is counted: (d) the decoded bytes from `aiter_bytes()`; (e) the encoded bytes (`aiter_raw()` or
+    `num_bytes_downloaded`), which a compressed body can pass far below its decoded size; (f) the
+    `Content-Length` header, which is absent on a chunked reply and is not checked against the bytes sent.
+  - What an oversized reply is: (g) `bad_response`, charged as reserved, not retryable, the ADR-0008 502;
+    (h) a new failure kind; (i) a retryable failure, so the next target is tried.
+- **Decision (proposed):** (b), (d) and (g).
+  - **The limit.** Every HTTP provider type in the route table (`ollama`, `openai`, `anthropic`) accepts an
+    optional `max_response_bytes`: a whole number from 1,024 to 67,108,864 (64 MiB), default 8,388,608 (8 MiB).
+    These numbers are chosen, not measured: no provider documents a reply size, and the default is far above a
+    non-streaming chat reply while keeping one reply's memory bounded. A value outside the bounds, a bool or a
+    non-integer stops startup with the `SettingsError` on `TOLLGATE_ROUTES_FILE` that the other fields give.
+  - **The count.** An HTTP adapter reads a 2xx body through one shared helper that adds up the length of each
+    chunk from `aiter_bytes()` and stops as soon as the total is above the limit; a body of exactly the limit is
+    read. Reading stops there, and leaving the stream closes the response without reading the rest. The status is
+    still read before the body, and a non-2xx body is still never read (ADR-0010).
+  - **The failure.** A body above the limit is `bad_response` with the reply's status: not retryable, so the
+    route does not fall back; the reservation is charged as made; and the client gets the ADR-0008 502. The
+    message holds only the kind and the status, never any of the body.
+  - The contract is unchanged: no response, header or field is added.
+- **Consequences:**
+  - One reply holds at most the limit plus one decompressed chunk in memory. A gzip chunk of 64 KiB can expand
+    far beyond that, so the bound is the limit plus one chunk's expansion, not the limit itself. Bounding the
+    decoder's output would need a decoder of our own and is not done.
+  - A reply that really is larger than the limit is lost, and the caller is charged the reservation as for any
+    `bad_response`; an operator raises `max_response_bytes` for that provider. Nothing records that the cap
+    applied until there is observability (Phase 4).
+  - The route table gains one optional field per HTTP provider, documented in `docs/setup.md`; existing route
+    files stay valid.
+  - The OpenAI and Anthropic adapters (T-205, T-206) read their replies through the same helper, with their own
+    provider's limit.
+  - ADR-0010's status is "Accepted - amended by ADR-0013", and its `bad_response` row names an oversized body.
+    Delivered by T-209. Accepted by the owner as written on 2026-11-14.
 
 ---
 
