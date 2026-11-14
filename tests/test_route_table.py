@@ -750,6 +750,36 @@ def test_every_visible_ascii_character_is_in_the_tested_range() -> None:
     assert EVERY_VISIBLE_ASCII[-1] == "~"
 
 
+KEY_CHARACTERS_REASON = "must be made only of visible ASCII characters (! to ~)"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [" ", "\t", "\n", "\r", "\x00", "\x1f", "\x7f", "\x80", "\xa0", "\xe9", "\u2028", "\U0001f600"],
+    ids=repr,
+)
+@pytest.mark.parametrize("variable", ["CLOUD_KEY", "CLAUDE_KEY"])
+def test_a_key_that_cannot_be_sent_in_a_header_fails_naming_the_variable_not_the_key(
+    tmp_path: Path, bad: str, variable: str
+) -> None:
+    # T-205: inside the key, since the ends are trimmed; both keyed provider types are checked.
+    keys = {"CLOUD_KEY": "test-cloud-value", "CLAUDE_KEY": "test-claude-value"}
+    keys[variable] = f"{KEY}{bad}x"
+    error = error_for(env(write_json(tmp_path, FULL_FILE), **keys))
+    assert error.variable == variable
+    provider = "cloud" if variable == "CLOUD_KEY" else "claude"
+    field = f"providers.{provider}.api_key_env"
+    assert str(error) == f"{variable}: is required by {VAR} {field} and {KEY_CHARACTERS_REASON}"
+    assert_clean(error, KEY)
+
+
+@pytest.mark.parametrize("key", ["!", "~", "sk-proj-AbC_123.x", EVERY_VISIBLE_ASCII], ids=len)
+def test_a_key_of_visible_ascii_loads_unchanged(tmp_path: Path, key: str) -> None:
+    data = with_provider({"type": "openai", "api_key_env": "CLOUD_KEY"})
+    table = Settings.from_env(env(write_json(tmp_path, data), CLOUD_KEY=key)).route_table
+    assert table.api_keys["p"].get_secret_value() == key
+
+
 def test_a_json_escaped_name_is_judged_after_decoding(tmp_path: Path) -> None:
     def text_for(name_literal: str) -> str:
         return f'{{"providers": {{"{name_literal}": {{"type": "mock"}}}}, "routes": {{}}}}'
