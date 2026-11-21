@@ -11,6 +11,8 @@ from redis.asyncio import Redis
 from app.api import chat
 from app.api.auth import ApiKeyAuthenticator, register_auth_error_handler
 from app.api.errors import register_error_handlers, strip_validation_error_schemas
+from app.cache.embedder import Embedder
+from app.cache.ollama_embedder import OllamaEmbedder
 from app.clock import Clock, SystemClock
 from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
@@ -35,15 +37,20 @@ from app.routing.config import (
 )
 from app.routing.router import TableRouter
 from app.settings import (
+    CACHE_EMBEDDER_URL_VAR,
     CAPACITY_TOKENS_VAR,
     REDIS_URL_VAR,
     TOKENS_PER_MINUTE_VAR,
+    CacheSettings,
     Settings,
     SettingsError,
 )
 
 # The connect timeout is fixed; `timeout_seconds` covers reads, writes and the pool (ADR-0010).
 CONNECT_TIMEOUT_SECONDS = MIN_TIMEOUT_SECONDS
+# The embedder's timeouts are fixed too (ADR-0015): 5 seconds to connect, 10 for the rest.
+EMBEDDER_CONNECT_TIMEOUT_SECONDS = 5
+EMBEDDER_TIMEOUT_SECONDS = 10
 
 
 class AsyncCloseable(Protocol):
@@ -151,6 +158,28 @@ def build_http_client(
     return httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
 
 
+def build_embedder(
+    cache: CacheSettings, transport: httpx.AsyncBaseTransport | None
+) -> tuple[httpx.AsyncClient, OllamaEmbedder]:
+    """The Ollama embedder on its own client. Nothing connects here; tests pass a MockTransport."""
+    timeout = httpx.Timeout(
+        connect=EMBEDDER_CONNECT_TIMEOUT_SECONDS,
+        read=EMBEDDER_TIMEOUT_SECONDS,
+        write=EMBEDDER_TIMEOUT_SECONDS,
+        pool=EMBEDDER_TIMEOUT_SECONDS,
+    )
+    failed = False
+    try:
+        client = httpx.AsyncClient(
+            base_url=cache.embedder_url.get_secret_value(), timeout=timeout, transport=transport
+        )
+    except httpx.InvalidURL:  # its message can echo part of the URL, which can hold credentials
+        failed = True
+    if failed:
+        raise SettingsError(CACHE_EMBEDDER_URL_VAR, "is not a valid URL")
+    return client, OllamaEmbedder(client, cache.embedder_model)
+
+
 def build_providers(
     table: RouteTable, clock: Clock, http_transport: httpx.AsyncBaseTransport | None = None
 ) -> ProvidersBuild:
@@ -206,6 +235,7 @@ def create_app(
     providers: Mapping[str, Provider] | None = None,
     redis_client: Redis | None = None,
     http_transport: httpx.AsyncBaseTransport | None = None,
+    embedder: Embedder | None = None,
 ) -> FastAPI:
     """Build the app. With no settings it reads os.environ; start with `uvicorn --factory`.
 
@@ -216,11 +246,17 @@ def create_app(
 
     A client the app builds is appended to `app.state.owned_clients`; the lifespan closes them at
     shutdown, last built first. A client passed in is the caller's to close.
+
+    With the cache on the app builds an `OllamaEmbedder` on its own client, kept on
+    `app.state.embedder`; `embedder` replaces it (and no client is built). Passing one while the
+    cache is off raises ValueError, so a test cannot believe it exercises a cache that is not there.
     """
     application = TollgateApp(title="Tollgate", lifespan=_lifespan)
     application.state.owned_clients = []
     resolved_settings = settings if settings is not None else Settings.from_env(os.environ)
     resolved_clock = clock if clock is not None else SystemClock()
+    if embedder is not None and resolved_settings.cache is None:
+        raise ValueError("embedder was passed but the cache is off")
     application.state.settings = resolved_settings
     application.state.clock = resolved_clock
     # The providers are built before the limiter, so a limiter error never leaves a Redis client
@@ -228,6 +264,12 @@ def create_app(
     providers_build = build_providers(resolved_settings.route_table, resolved_clock, http_transport)
     registry = providers_build.providers
     application.state.owned_clients.extend(providers_build.built_clients)
+    application.state.embedder = embedder
+    if embedder is None and resolved_settings.cache is not None:
+        embedder_client, application.state.embedder = build_embedder(
+            resolved_settings.cache, http_transport
+        )
+        application.state.owned_clients.append(embedder_client)
     if provider is not None:
         registry["mock"] = provider
     if providers is not None:
