@@ -157,6 +157,52 @@ answer to it has not been checked.
   missing. They never show a value from the file or the environment, and an unreadable file is reported
   without its path.
 
+### Running against real providers
+
+[routes.example.json](routes.example.json) is a working route table with one provider of each real type and two
+routes with fallback; a test loads it, so it cannot drift from the schema. The model names in it are examples:
+change them to models your accounts can use. Real calls are made only by you, by hand, with your own keys; tests
+and CI never make them. Calls to OpenAI and Anthropic cost money.
+
+1. Copy the example outside the repository (or keep your copy untracked) and edit it. Keys never go in the file
+   or in the repository: the file holds only the name of the variable, in `api_key_env`.
+2. Set the variables in your shell and start the gateway (Git Bash, from the repository root):
+
+   ```bash
+   export TOLLGATE_API_KEYS="<a long random gateway key>"
+   export TOLLGATE_TOKENS_PER_MINUTE=60000
+   export TOLLGATE_ROUTES_FILE="<path to your copy>"
+   export OPENAI_API_KEY="<your OpenAI key>"          # only if the file has an openai provider
+   export ANTHROPIC_API_KEY="<your Anthropic key>"    # only if the file has an anthropic provider
+   .venv/Scripts/python -m uvicorn --factory app.main:create_app
+   ```
+
+   A missing or blank key variable, or any schema error, stops the gateway at startup and names the variable,
+   never the value. For a run against Ollama only, edit your copy of `routes.example.json`: remove the `openai`
+   and `claude` providers and every target that names them, and delete the `smart` route, which is left with no
+   target (`fast` keeps only `local`, and `default` already points to `local`). Make sure Ollama is running with
+   the model pulled, for example `ollama pull llama3.2`.
+3. Send a request. `model` selects the route (`fast` above). A model that is neither a route nor covered by
+   `default` is a 404, but `routes.example.json` has a `default` to `local`, so with it any other model name goes
+   to `local` and you will not see a 404:
+
+   ```bash
+   curl -i localhost:8000/v1/chat/completions \
+     -H "Authorization: Bearer ${TOLLGATE_API_KEYS%%,*}" \
+     -H "Content-Type: application/json" \
+     -d '{"model": "fast", "messages": [{"role": "user", "content": "Say hello."}], "max_tokens": 50}'
+   ```
+
+   (The header uses the first of the gateway keys.) The response carries `usage`, the three
+   `x-ratelimit-*-tokens` headers, `x-tollgate-provider` (the provider that answered) and `x-tollgate-fallbacks`
+   (how many targets failed before it).
+4. Fallback: targets are tried in order. A retryable failure (a timeout, a connection error, a 429 or a 5xx from
+   the provider) moves to the next target; any other failure, such as a 4xx other than 429 or a reply over
+   `max_response_bytes`, does not. If every target fails, or one fails without fallback, the client gets the 502.
+   Stop the local Ollama and send the request again to see the second target answer (`x-tollgate-fallbacks: 1`); that call goes to OpenAI and is billed.
+5. Timeouts: `timeout_seconds` (default 60, 5 to 600) applies to each read, write and pool wait of an HTTP
+   provider, and connecting always waits at most 5 seconds. It is not a limit on the whole request.
+
 ### Authentication
 
 `POST /v1/chat/completions` requires `Authorization: Bearer <key>`, where the key is one of
