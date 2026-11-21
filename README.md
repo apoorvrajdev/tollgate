@@ -1,21 +1,21 @@
 # Tollgate
 
-**An LLM gateway with token-aware rate limiting, model routing and semantic caching. Today it serves an OpenAI-style chat completions endpoint, routed by model to a mock, Ollama, OpenAI or Anthropic provider with fallback, behind API key authentication and a per-key token limit. Caching is planned, and no real provider has been called yet.**
+**An LLM gateway with token-aware rate limiting, model routing and semantic caching. Today it serves an OpenAI-style chat completions endpoint, routed by model to a mock, Ollama, OpenAI or Anthropic provider with fallback, behind API key authentication and a per-key token limit. Caching is planned. The only real provider call recorded is one manual request through a local Ollama; OpenAI and Anthropic have not been called.**
 
 [![CI](https://github.com/apoorvrajdev/tollgate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/apoorvrajdev/tollgate/actions/workflows/ci.yml)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
-**Status during Phase 2, November 2026.** `GET /health` and non-streaming `POST /v1/chat/completions` are implemented, with API key authentication, token-aware rate limiting, and routing with fallback across the mock, Ollama, OpenAI and Anthropic providers. The real-provider adapters are tested only against fakes; a recorded run against a real provider (T-207), caching and benchmarks are planned, and every section says which is which. This README is updated at the end of each phase and when a feature lands.
+**Status at the end of Phase 2, November 2026.** `GET /health` and non-streaming `POST /v1/chat/completions` are implemented, with API key authentication, token-aware rate limiting, and routing with fallback across the mock, Ollama, OpenAI and Anthropic providers. The real-provider adapters are tested only against fakes, and the one real call recorded is a manual request through a local Ollama (T-207); caching and benchmarks are planned, and every section says which is which. This README is updated at the end of each phase and when a feature lands.
 
 ## At a glance
 
 | | |
 | --- | --- |
 | **Target** | One OpenAI-compatible API (`/v1/chat/completions`) in front of several model providers (ADR-0004, Accepted) |
-| **Built today** | `GET /health`; non-streaming `POST /v1/chat/completions` routed by model to the mock, Ollama, OpenAI or Anthropic provider, with fallback on a retryable failure (the real-provider adapters tested only against fakes); API key authentication; a per-key token bucket (in memory or in Redis) that reserves an estimate before the call and settles with the reported usage after; 429 and 502 responses and `x-ratelimit-*-tokens` headers; a committed OpenAPI snapshot; a one-command check; local commit guards; architecture, decision and task documents |
-| **Planned** | A recorded run against a real provider (T-207), semantic caching (Phase 3), Docker Compose, observability and load benchmarks (Phase 4), demo and write-up (Phase 5) |
+| **Built today** | `GET /health`; non-streaming `POST /v1/chat/completions` routed by model to the mock, Ollama, OpenAI or Anthropic provider, with fallback on a retryable failure (the real-provider adapters tested only against fakes, plus one manual run against a local Ollama); a real-provider guide and an example route table; API key authentication; a per-key token bucket (in memory or in Redis) that reserves an estimate before the call and settles with the reported usage after; 429 and 502 responses and `x-ratelimit-*-tokens` headers; a committed OpenAPI snapshot; a one-command check; local commit guards; architecture, decision and task documents |
+| **Planned** | Optional manual runs against OpenAI and Anthropic with the owner's own keys, semantic caching (Phase 3), Docker Compose, observability and load benchmarks (Phase 4), demo and write-up (Phase 5) |
 | **Toolchain** | Python 3.13, FastAPI, ruff, mypy in strict mode, pytest |
 | **Delivery** | Pull requests only, protected `main`, merge commits. CI runs on every pull request and on pushes to `main`, and `lint and test` is a required check on `protect-main` |
 | **Results** | Not measured yet. See [Results](#results) |
@@ -32,15 +32,15 @@
 
 | Built and merged on `main` | Not built yet |
 | --- | --- |
-| `GET /health` and `POST /v1/chat/completions` (non-streaming) on a FastAPI app, served by the mock or by the Ollama, OpenAI and Anthropic adapters (tested only against fakes; no real provider has been called yet) | Streaming |
-| API key authentication (`Authorization: Bearer`) with one fixed 401 | A recorded run against a real provider (T-207) |
+| `GET /health` and `POST /v1/chat/completions` (non-streaming) on a FastAPI app, served by the mock or by the Ollama, OpenAI and Anthropic adapters (tested only against fakes; one manual run against a local Ollama is recorded) | Streaming |
+| API key authentication (`Authorization: Bearer`) with one fixed 401 | Recorded runs against OpenAI and Anthropic |
 | Model routing from a JSON route table: ordered fallback on a retryable provider failure, with `x-tollgate-provider` and `x-tollgate-fallbacks` headers | |
 | Token-aware rate limiting per key: estimate, reserve, settle, refund; 429 with `Retry-After`, 502, `x-ratelimit-*-tokens` headers | Semantic cache |
 | In-memory and Redis limiters, one shared behaviour suite; the Redis limiter is also tested against Redis 7.4.12 in CI | Docker Compose, metrics, benchmarks |
 | Validated settings from environment variables and an injected clock | Any measured latency, hit-rate or cost figure |
 | `python scripts/check.py`: ruff, ruff format, mypy strict, contract snapshot, pytest | |
 | Commit guards in `.githooks/`, with tests | |
-| `docs/`: architecture, decisions, tasks, setup | |
+| `docs/`: architecture, decisions, tasks, setup, a real-provider guide and an example route table | |
 | CI: the `lint and test` job on every pull request and on pushes to `main`, a required check on `protect-main` | |
 
 ## The problem
@@ -77,7 +77,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | API layer | `/v1/chat/completions`, request and response models, the OpenAI-style error shape | 0-1 | Built |
 | Authentication | Bearer API keys from configuration, compared as SHA-256 digests | 1 | Built |
-| Providers | Adapters behind one interface: the mock, Ollama, OpenAI and Anthropic, on plain httpx (ADR-0004, ADR-0010) | 1-2 | Built; the real-provider adapters are tested only against fakes |
+| Providers | Adapters behind one interface: the mock, Ollama, OpenAI and Anthropic, on plain httpx (ADR-0004, ADR-0010) | 1-2 | Built; tested only against fakes, plus one manual run against a local Ollama (T-207) |
 | Token counting | A character heuristic estimates before the call; the provider's reported usage settles afterwards (ADR-0007) | 1 | Built |
 | Rate limiter | Per-key token bucket, in memory or in Redis through one Lua script (ADR-0006, ADR-0007) | 1 | Built |
 | Router | A route table maps each model to ordered provider targets, with fallback on a retryable provider failure (ADR-0011) | 2 | Built |
@@ -117,17 +117,19 @@ Still to be decided: the deployment target (Phase 4).
 
 What has been recorded is correctness, not performance. On the `main` commit `c5060af` (CI run `43448484605`, Ubuntu, Python 3.13), the `pytest` step passed 667 tests with 45 deselected, and the `redis integration` step then ran those 45 shared limiter cases against a `redis:7.4.12` service container: 45 passed. Locally, `scripts/check.py` passed with the same counts. The limiter is therefore tested against Redis 7.4.12 in CI, and only that; it has not been run against other Redis versions, a cluster or a managed service.
 
+More recently, on the tree merged as `8516d0a`, `scripts/check.py` passed locally (14 contract tests, 1,728 other tests, 45 deselected) and CI run `44911284742` on that commit passed. The one real-provider run recorded is manual and is a correctness check, not a measurement: on 2026-11-21, with Ollama 0.40.17 and `llama3.2`, one request through the gateway returned a 200 with `usage` of 28 prompt and 26 completion tokens, `x-tollgate-provider: local` and `x-tollgate-fallbacks: 0`. It is the owner's report and was run once; no latency was recorded.
+
 Planned measurements: cache hit rate and wrong-hit rate on a small labelled evaluation set (Phase 3); latency under load (Phase 4).
 
 ## Roadmap
 
-Phases 0 and 1 are complete, Phase 2 is in progress, and Phases 3 to 5 are planned. Details and acceptance criteria are in [`docs/TASKS.md`](docs/TASKS.md).
+Phases 0 to 2 are complete, and Phases 3 to 5 are planned. Details and acceptance criteria are in [`docs/TASKS.md`](docs/TASKS.md).
 
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Foundation: toolchain (T-001), CI (T-003), tests for the commit guards (T-002), typed app and OpenAPI snapshot (T-004) | T-000, T-001, T-002, T-003 and T-004 done |
 | 1 | Token-aware rate limiting: clock and settings (T-101), chat endpoint with a mock provider (T-102), API keys (T-103), token estimator (T-104), in-memory bucket and shared suite (T-105), Redis bucket (T-106), real Redis in CI (T-107), limits on the endpoint (T-108) | T-101 to T-108 done |
-| 2 | Model routing: route table and fallback (T-201 to T-203), Ollama (T-204), OpenAI (T-205) and Anthropic (T-206) adapters, a cap on the settle charge (T-208) and on the reply size (T-209), the owner's real-provider run (T-207) | T-201 to T-206, T-208 and T-209 done; T-207 to do |
+| 2 | Model routing: route table and fallback (T-201 to T-203), Ollama (T-204), OpenAI (T-205) and Anthropic (T-206) adapters, a cap on the settle charge (T-208) and on the reply size (T-209), the owner's real-provider run and guide (T-207), the adapters' shared code (T-210) | T-201 to T-210 done; gate signed off 2026-11-21 |
 | 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation, a minimal evaluation harness | Planned |
 | 4 | Docker Compose, observability, reproducible load benchmarks, deployment ADR | Planned |
 | 5 | Demo and write-up | Planned |
@@ -136,7 +138,7 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 
 ## Limitations
 
-- The Ollama, OpenAI and Anthropic adapters are tested only against hand-written fakes on `httpx.MockTransport`; no real provider has been called yet (the owner's run is T-207). Streaming is rejected with a 400, and the API is not yet checked against the official OpenAI SDK (a backlog item).
+- The Ollama, OpenAI and Anthropic adapters are tested only against hand-written fakes on `httpx.MockTransport`; the only real call recorded is one manual request through a local Ollama (T-207), so their behaviour against the live OpenAI and Anthropic APIs is unchecked. Streaming is rejected with a 400, and the API is not yet checked against the official OpenAI SDK (a backlog item).
 - The token estimate is a character heuristic (about four characters per token plus per-message overhead). It is rough, mostly for English text, and the provider's reported usage corrects it when the request settles.
 - The `x-ratelimit-*-tokens` headers and the 429 and 502 bodies follow OpenAI's observed behaviour, which OpenAI does not fully document. On a 200 the headers show the balance after the reservation, so the balance after settling appears on the next request. An authenticated 400 and a 401 carry no limit headers.
 - Known gaps, listed in the task log: a malformed `TOLLGATE_REDIS_URL` scheme gives redis-py's own `ValueError`; a Redis outage gives a 500; a failure while settling after a successful provider call loses the completion and gives a 500; a client that disconnects mid-request stays charged at the estimate; each request hashes the API key twice.
@@ -154,7 +156,7 @@ Backlog: a test that runs the official OpenAI Python SDK against the gateway wit
 | **Language and API** | Python 3.13, FastAPI 0.162.2, pydantic 2.14.3, uvicorn 0.54.0; OpenAI-style chat completions (non-streaming) | Streaming, if a task adds it |
 | **Quality** | pytest 9.2.0, httpx 0.28.1, fakeredis 2.40.0 (with lupa 2.8), ruff 0.17.4, mypy 2.4.1 (strict); OpenAPI snapshot test; CI on Python 3.13 in GitHub Actions | None |
 | **Commit guards** | Node.js scripts in `.githooks/`, with tests | None |
-| **State and providers** | In-memory or Redis token bucket (redis-py 8.1.0, one Lua script; Redis 7.4.12 in CI); the mock provider and the Ollama, OpenAI and Anthropic adapters on plain httpx 0.28.1, tested only with `httpx.MockTransport` | A recorded run against a real provider (T-207) |
+| **State and providers** | In-memory or Redis token bucket (redis-py 8.1.0, one Lua script; Redis 7.4.12 in CI); the mock provider and the Ollama, OpenAI and Anthropic adapters on plain httpx 0.28.1, tested only with `httpx.MockTransport` | Optional manual runs against OpenAI and Anthropic |
 | **Operations** | None | Docker Compose, metrics, structured logs (Phase 4) |
 
 ## Run locally
@@ -202,7 +204,8 @@ tollgate/
 │   ├── ARCHITECTURE.md   # target design, interfaces, conventions
 │   ├── DECISIONS.md      # ADRs with status
 │   ├── TASKS.md          # phases, task cards, log
-│   └── setup.md          # setup, pins, commit hooks
+│   ├── setup.md          # setup, pins, commit hooks, real-provider guide
+│   └── routes.example.json  # example route table for real providers
 ├── scripts/
 │   ├── check.py          # the single check command
 │   └── regenerate_openapi.py  # the only writer of the OpenAPI snapshot
@@ -236,7 +239,7 @@ tollgate/
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Request flow, interfaces, conventions |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Decision records and their status |
 | [`docs/TASKS.md`](docs/TASKS.md) | Phases, task cards, acceptance criteria, log |
-| [`docs/setup.md`](docs/setup.md) | Setup, updating pins, enabling the commit hooks |
+| [`docs/setup.md`](docs/setup.md) | Setup, updating pins, enabling the commit hooks, running against real providers |
 
 ---
 
