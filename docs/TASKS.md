@@ -9,6 +9,36 @@ A task becomes `done` in the pull request that delivers it (the status is set in
 takes effect when the pull request merges). `in-progress` and `review` exist only on the task branch; `main`
 shows `todo`, `blocked` or `done`.
 
+## Current phase: 3 - Semantic caching
+
+An eligible chat completion (last message from the user) is embedded by a local Ollama and looked up, after the
+reservation, in a bounded in-memory cache partitioned by caller and by every other part of the request. A hit
+returns the stored answer and refunds the reservation; a miss runs the route and stores a `stop` answer. An
+embedder failure skips the cache. The similarity threshold is required when the cache is on, and the value the
+docs recommend comes from a recorded run of an eval harness of labelled prompt pairs. No new dependency.
+Planned 2026-11-21; ADR-0014 and ADR-0015 were accepted by the owner the same day.
+
+**Gate (owner signs off):**
+
+- [ ] Every Phase 3 task is `done`, and `python scripts/check.py` is green locally and in CI
+- [x] ADR-0014 and ADR-0015 accepted or revised, and the status lines of ADR-0007 and ADR-0011 updated to name
+      ADR-0014 (accepted as written, 2026-11-21)
+- [ ] The cache is looked up only after route selection and the reservation; it is partitioned by caller and by
+      every other part of the request; a hit settles 0 and runs no target; an embedder failure is a `skip`
+      and the request is still served; only a `stop` answer within the size cap is stored; entries expire and
+      are evicted on the injected clock
+- [ ] Every 200 carries `x-tollgate-cache` (`hit`, `miss` or `skip`), no other status does, and the OpenAPI
+      snapshot records it
+- [ ] The Ollama embedder is tested through `httpx.MockTransport` only, and the app closes its client at shutdown
+- [ ] The eval harness runs in CI on the hashing baseline, and the threshold the docs recommend comes from the
+      owner's recorded run against a local embedding model, or the owner explicitly waives the run and the docs
+      recommend no threshold
+- [ ] Tests use no network and no paid API (the CI Redis container excepted, ADR-0006); an embedding model is
+      called only by the owner, by hand
+- [ ] Every Phase 3 task that adds tests has a mutation table with no unexplained survivor
+- [ ] README and ARCHITECTURE describe what is built, and every claim comes from a recorded run
+- [ ] Every commit is authored by the owner, with no co-author trailers
+
 ## Phase 2 - Model routing (complete)
 
 Each chat completion is routed by its `model` to an ordered list of provider targets read from a validated
@@ -82,8 +112,8 @@ No gateway features yet. The owner signed off the gate on 2026-11-12, and Phase 
 Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
 T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-204,
 then T-208 and T-209 (both added 2026-11-14), then T-205 and T-206, then T-207 and T-210 (added
-2026-11-14) in either order. The rows below are in delivery order; the
-cards further down are listed by ID.
+2026-11-14) in either order. Delivery order in Phase 3: T-301 to T-307 in number order. The rows below are in
+delivery order; the cards further down are listed by ID.
 
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -110,6 +140,13 @@ cards further down are listed by ID.
 | T-206 | Anthropic adapter | 2 | done | T-204, T-208, T-209 |
 | T-207 | Real-provider guide and the owner's Ollama run | 2 | done | T-204, T-205, T-206 |
 | T-210 | Share the HTTP adapters' reply checks and request handling | 2 | done | T-206 |
+| T-301 | Embedders: the interface, the hashing baseline and the Ollama embedder | 3 | todo | Phase 2 gate; ADR-0014 and ADR-0015 accepted 2026-11-21 |
+| T-302 | Cache settings | 3 | todo | T-301 |
+| T-303 | In-memory semantic cache | 3 | todo | T-301, T-302 |
+| T-304 | Cache eval harness and its dataset | 3 | todo | T-303 |
+| T-305 | Build the cache in the app and share the id source | 3 | todo | T-303, T-304 |
+| T-306 | Semantic cache on chat completions | 3 | todo | T-305 |
+| T-307 | The owner's eval run, the recommended threshold and the cache guide | 3 | todo | T-304, T-306 |
 
 ---
 
@@ -1103,20 +1140,376 @@ cards further down are listed by ID.
   60 lines), tests about 360 added, docs about 10. Above the ~400-line plan threshold; the owner approves
   the size with this card. T-205 and T-206 both ran past their estimates, mostly in tests.
 
+### T-301 - Embedders: the interface, the hashing baseline and the Ollama embedder
+
+- **Status:** todo
+- **Goal:** the cache has embedders to call: a deterministic hashing baseline for tests and the eval harness, and
+  an Ollama embedder tested only through `httpx.MockTransport`. Nothing in the request path uses them yet.
+- **Context:** ADR-0013, ADR-0015, `app/providers/http_body.py`, `app/providers/errors.py`,
+  `app/providers/ollama.py` (the adapter pattern), `tests/test_ollama_provider.py`, `tests/test_http_body.py`.
+- **Depends on:** the Phase 2 gate (signed off); ADR-0014 and ADR-0015 accepted (2026-11-21).
+- **Deliverables:**
+  - `app/cache/__init__.py` and `app/cache/embedder.py`: an `Embedder` protocol with an `identity` string and
+    `async def embed(self, text: str) -> array[float]`, which returns a unit vector; and `EmbeddingError(kind,
+    status_code)`, using the `ProviderErrorKind` values, with a message built from the kind and the status only.
+  - `app/cache/hashing.py`: `HashingEmbedder` as ADR-0015 says. The text is lower-cased and padded with one space
+    at each end. Each 3-character window is hashed with `hashlib.blake2b(digest_size=8)` to an index modulo 512
+    and counted, and the counts are L2-normalised. The identity is `hashing:v1`. A text with no window (the empty
+    string) raises `EmbeddingError("bad_response", None)`.
+  - `app/cache/ollama_embedder.py`: `OllamaEmbedder(client, model, *, max_response_bytes=1_048_576)` as ADR-0015
+    says, posting through `post_json` and turning each `ProviderError` into an `EmbeddingError` with the same
+    kind and status. The `EmbeddingError` is raised after the `except` block, so it has no `__context__`. The
+    identity is `ollama:<model>`.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Hashing: the same text gives the same vector from two instances, and one fixed input gives a pinned list
+     of non-zero indices and counts, so a change of hash, window or dimension fails. The length is 512 and the
+     norm is 1 within 1e-12. Upper and lower case give the same vector, two different texts give different
+     vectors, and the empty string raises.
+  2. Ollama request translation is exact: one `POST /api/embed` per call, with the body exactly `{"model": <model>,
+     "input": <text>, "truncate": false}`.
+  3. Ollama reply: one vector is returned normalised (a reply of `[3, 4]` gives `[0.6, 0.8]`). Each of these
+     gives `bad_response` with the status: a body that is not an object; `embeddings` missing, not a list, empty
+     or holding two vectors; an empty vector; an element that is a bool, a string or null; `NaN` or `Infinity`
+     (which `json.loads` accepts); an integer too large for a float (a 400-digit number, which must not escape
+     as an `OverflowError`); a zero vector; a vector whose norm `math.sqrt(math.sumprod(v, v))` is not finite
+     (`[1e308, 1e308]`); a later reply whose length differs from the first reply's; invalid JSON; and a body
+     of 1,048,577 bytes. A body of exactly 1,048,576 bytes is read.
+  4. Ollama failures: a connection error gives `connection`, a timeout `timeout`, 429 `rate_limited`, and 400
+     (the over-long input), 404 and 500 give `upstream_status` with that status. No message contains the reply
+     body, the text or the URL, and no `EmbeddingError` has a `__context__`.
+- **Verification:** `python scripts/check.py` green; mutation table (`truncate` true or left out, `input` sent as a
+  list, the reply not normalised again, a zero vector accepted, `NaN` or a bool accepted, the `float()`
+  conversion moved outside the guard (the huge integer escaping), the norm taken with `math.hypot`, the first of two
+  vectors taken, the length check skipped or compared with the latest reply instead of the first, the size cap
+  removed or moved by one, the reply body in a message, a `__context__` kept, the hash replaced by Python's
+  `hash()`, case kept, the dimension changed from 512, the hashing normalisation dropped); `gh pr checks <n>
+  --watch`.
+- **Branch and commits:** `feat/t-301-embedders`; `feat(cache): add the embedder interface and the hashing
+  baseline`, `feat(cache): add the Ollama embedder`, `docs(tasks): complete T-301`.
+- **Size:** about 400 lines, most of them reply and failure cases. At the limit, so the plan goes to the owner if
+  it runs over.
+
+### T-302 - Cache settings
+
+- **Status:** todo
+- **Goal:** the cache settings are read and validated at startup. With the cache on, `create_app()` builds the
+  Ollama embedder on its own client, which is closed at shutdown. Nothing in the request path uses it yet.
+- **Context:** ADR-0014, ADR-0015, `app/settings.py`, `app/main.py`, `tests/test_settings.py`,
+  `tests/test_app_wiring.py`, `docs/setup.md`.
+- **Depends on:** T-301.
+- **Deliverables:**
+  - `Settings.cache: CacheSettings | None`, which is `None` when `TOLLGATE_CACHE_EMBEDDER` is unset.
+    `CacheSettings` holds `embedder` (`"ollama"`), `embedder_model`, `embedder_url` (a `SecretStr`),
+    `similarity_threshold` (a float), `ttl_seconds` and `max_entries`. The rules are:
+    - `TOLLGATE_CACHE_EMBEDDER` is exactly `ollama`.
+    - `TOLLGATE_CACHE_EMBEDDER_MODEL` is required and must not be blank. It is stripped.
+    - `TOLLGATE_CACHE_EMBEDDER_URL` is optional and defaults to `http://localhost:11434`. Set but blank is an
+      error.
+    - `TOLLGATE_CACHE_SIMILARITY_THRESHOLD` is required. It must match `0\.[0-9]{1,4}`, `1` or `1\.0{1,4}` and
+      be at least 0.5.
+    - `TOLLGATE_CACHE_TTL_SECONDS` is a whole number from 60 to 604,800, default 3,600.
+    - `TOLLGATE_CACHE_MAX_ENTRIES` is a whole number from 1 to 100,000, default 1,000.
+    - Any other `TOLLGATE_CACHE_*` variable above that is set while `TOLLGATE_CACHE_EMBEDDER` is unset is an
+      error naming that variable, so a half-configured cache never starts silently off.
+    - Every error is a `SettingsError` naming the variable, with a fixed reason and never a value.
+  - With the cache on, `create_app()` builds an `httpx.AsyncClient` with the URL, a 5-second connect timeout and
+    10 seconds for reads, writes and the pool, using the `http_transport=` transport. It appends the client to
+    `app.state.owned_clients` and keeps an `OllamaEmbedder` on `app.state.embedder`, which is `None` when the
+    cache is off. A new `embedder=` keyword lets tests inject one, and then no client is built. Passing
+    `embedder=` while the cache is off raises `ValueError`, so a test cannot believe it exercises a cache that
+    is not there.
+  - `docs/setup.md`: the variables and their rules.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. With `TOLLGATE_CACHE_EMBEDDER` unset: `cache` is `None`, `app.state.embedder` is `None`, no client is added,
+     and every existing test passes unchanged.
+  2. A complete valid set loads the exact values. With the optional variables unset, the defaults apply: TTL
+     3,600, 1,000 entries and the default URL.
+  3. Each of these fails with a `SettingsError` naming its variable and holding no value:
+     - The embedder is `redis`, `Ollama` or blank.
+     - The model is unset or blank, or the URL is blank.
+     - The threshold is unset, blank, `0.4999`, `1.0001`, `0.12345`, `.9`, `1e0`, `-0.9`, `nan`, or uses
+       non-ASCII digits.
+     - The TTL is 59, 604,801, `abc` or blank.
+     - The maximum is 0, 100,001 or blank.
+     - A cache variable is set while the embedder is unset.
+
+     The boundaries are accepted: a threshold of `0.5`, `0.9999`, `1` or `1.0000`; a TTL of 60 or 604,800; a
+     maximum of 1 or 100,000.
+  4. With the cache on, the client has the URL and the timeouts above, opens no connection, and is closed at
+     shutdown. With an injected embedder, no client is built. `embedder=` with the cache off raises.
+  5. The URL never appears in a `repr` or an error.
+- **Verification:** `python scripts/check.py` green; mutation table (each threshold bound moved, five decimal
+  places accepted, each TTL and maximum bound moved by one, each default changed, a blank URL falling back to the
+  default, a cache variable set without the embedder ignored, the client not registered for shutdown, the
+  connect and read timeouts swapped, the URL in a message, a blank TTL or maximum taking the default,
+  `embedder=` accepted with the cache off); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-302-cache-settings`; `feat(settings): read and validate the cache settings`,
+  `feat(app): build the Ollama embedder when the cache is on`, `docs(tasks): complete T-302`.
+- **Size:** about 320 lines.
+
+### T-303 - In-memory semantic cache
+
+- **Status:** todo
+- **Goal:** one class implements ADR-0014's partition, lookup, store, expiry and eviction. It is unit-tested with
+  fake embedders and the fake clock, and the route does not use it yet.
+- **Context:** ADR-0014, ADR-0015, `app/cache/`, `app/api/models.py`, `app/clock.py`, `tests/fakes.py`.
+- **Depends on:** T-301, T-302.
+- **Deliverables:**
+  - `app/cache/semantic.py`:
+    - `partition_key(caller_id, request, embedder_identity) -> str`, as ADR-0014 says. It hashes the request's
+      `model_dump(mode="json")` with the last message's content removed, together with the caller id and the
+      embedder identity, as `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=True)`, and returns
+      the SHA-256 hex digest of that ASCII text.
+    - `InMemorySemanticCache(embedder, clock, *, similarity_threshold, ttl_seconds, max_entries)`.
+      `async lookup(caller_id, request)` returns one of three results:
+      - `Hit(response, provider_name, similarity)`
+      - `Miss(ticket)`, where the ticket holds the partition key and the vector for a later store
+      - `Skip()`, when the request is not eligible or the embedder failed
+
+      `store(ticket, response, provider_name) -> bool` stores only a response with exactly one choice whose
+      finish reason is `stop` and whose `model_dump_json()` is at most 65,536 bytes in UTF-8. It keeps those
+      bytes, not the model, and a hit validates them back into a `ChatResponse`. Vectors are kept as
+      `array("d")`, and a lookup scans only its own partition.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Partition: two requests that differ only in the last message's content share a key. A change in any one of
+     these gives a different key: the caller id, `model`, `max_completion_tokens`, `max_tokens`, `temperature`,
+     `n`, `stream` (absent against `false`), `user`, an earlier message's role, content or name, the last
+     message's name, or the embedder identity. One fixed request gives a pinned key, so the canonical form
+     cannot drift. A lone surrogate (`"\ud800"`) in `user`, in an earlier message's `name` or in `model` gives a
+     key without raising.
+  2. Messages `[user, assistant]` and `[user, system]` give a `Skip`, and the embedder is not called; messages
+     `[system, user]` and `[assistant, user]` are looked up.
+  3. The threshold is exact: with fixed vectors, a similarity exactly equal to the threshold hits (`(1, 0)` against
+     `(0.75, y)` at 0.75), and one just below it (`0.7499999999999999`) misses. The hit reports that similarity.
+  4. Of two entries above the threshold, the more similar wins. At equal similarity the more recently stored
+     wins.
+  5. An identical vector in another partition (another caller) never hits.
+  6. An entry hits 0.001 seconds before `stored_at + ttl_seconds` and misses at exactly that time; a hit does not
+     extend its life.
+  7. Eviction at `max_entries`: an expired entry goes first, even when it was used more recently than a live
+     one (with a maximum of 2, store A, store B a little later, hit A, move the clock to where A has expired and
+     B has not, store C, and B remains while A is gone; plain LRU would have evicted B).
+     Otherwise the least recently used goes, where a hit counts as a use: with a maximum of 2, store A and B, hit
+     A, store C, and B is gone. The count never passes the maximum.
+  8. A `length` or `content_filter` answer is not stored, nor one with zero or two choices; a body of exactly
+     65,536 bytes is stored and one of 65,537 is not, counted in UTF-8 (a body with non-ASCII text at the
+     boundary).
+  9. An `EmbeddingError` gives `Skip`; any other exception from the embedder propagates.
+- **Verification:** `python scripts/check.py` green; mutation table (`>=` changed to `>`, the tie broken by the
+  oldest entry, each partition field left out in turn (`stream` included), `ensure_ascii=False`, the size
+  counted in characters instead of UTF-8 bytes, two choices accepted, the last content kept in the key, the
+  role check removed or applied to the first message, expiry `>=` changed to `>`, a hit extending the life, FIFO instead of LRU,
+  expired entries not evicted first, the size cap moved by one, a `length` answer stored, an `EmbeddingError`
+  propagated, every exception caught, the scan reaching other partitions); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-303-semantic-cache`; `feat(cache): add the in-memory semantic cache`,
+  `docs(tasks): complete T-303`.
+- **Size:** about 400 lines: about 150 of production code and 250 of tests. At the limit, so the plan goes to
+  the owner if it runs over.
+
+### T-304 - Cache eval harness and its dataset
+
+- **Status:** todo
+- **Goal:** one run measures the real cache's hit rate and wrong-hit rate on a fixed dataset of labelled prompt
+  pairs, at every threshold from 0.50 to 1.00, and reports its settings. CI runs it with the hashing baseline
+  (the Phase 3 requirement in "Later phases").
+- **Context:** ADR-0014, ADR-0015, `app/cache/`, `scripts/check.py`, "Requirements that carry into the task
+  cards" below.
+- **Depends on:** T-303.
+- **Deliverables:**
+  - `eval/cache_pairs.json`: 80 pairs of English text written for this project, 40 `same` and 40 `different`.
+    Each pair has an `id`, a `category`, `first`, `second` and a `label`. The `different` pairs have 8 in each of
+    five categories: unrelated topic, negation, changed number, swapped direction or order, and changed entity.
+    The `same` pairs are rewordings of varied kinds. The owner reviews the pairs in the pull request.
+  - `app/cache/evaluation.py`:
+    - `evaluate(pairs, embedder, clock) -> EvalReport` runs each pair through its own new
+      `InMemorySemanticCache`, with a threshold of 0.5 and a single entry. It stores an answer for `first` and
+      looks up `second`, both as a one-message request with a fixed model and caller.
+    - The `Hit` similarity places the pair: it hits at every threshold up to that similarity, and a miss at 0.5
+      misses at every threshold. This is exact under the cache's own `>=` rule.
+    - A `Skip` on either the store's lookup or the second lookup stops the run with an error, and no report or
+      recommendation is produced (ADR-0014).
+    - The report holds the hit rate on `same` pairs and the wrong-hit rate on `different` pairs at each threshold
+      `i / 100` for `i` from 50 to 100 (51 rows), with the wrong hits per category.
+    - The recommended threshold is the lowest below 1.00 with no wrong hit, or none (ADR-0014).
+  - `scripts/eval_cache.py`:
+    - Options: `--embedder hashing|ollama`, `--model` and `--url` for Ollama, and `--output` for a JSON copy of
+      the report.
+    - It prints a Markdown report with the settings, the table and the recommendation. The settings are the date,
+      the embedder identity, the dataset's SHA-256, the pair counts and, for Ollama, the version from
+      `GET /api/version`. The URL is never printed.
+  - `docs/cache-eval.md`: the method, how to run it, and the hashing baseline from a recorded local run with its
+    settings, labelled as lexical, not semantic.
+  - ARCHITECTURE section 5: `eval/`, `app/cache/evaluation.py` and `scripts/eval_cache.py` in the layout.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. A test checks the dataset: exactly 80 pairs, 40 `same` and 40 `different`, 8 in each `different` category,
+     unique ids, and no empty text.
+  2. On a hand-made dataset with fixed vectors, the hit rate, the wrong-hit rate and the per-category counts are
+     exact. A pair whose similarity equals a threshold counts as a hit at that threshold, including one whose
+     similarity is exactly `float("0.57")`, which `0.5 + 7 * 0.01` would miss by one unit in the last place, and
+     the 51 thresholds equal `[i / 100 for i in range(50, 101)]` exactly.
+     An embedder that fails on one pair stops the run, and nothing is reported.
+  3. The recommendation is the lowest threshold below 1.00 with no wrong hit. It is none when only 1.00, or no
+     threshold, has zero wrong hits.
+  4. The whole dataset runs with the hashing embedder in the test suite, with no network, and the report has 51
+     rows and every setting.
+  5. With `--embedder ollama` on an `httpx.MockTransport`, the script calls `/api/version` and `/api/embed`, and
+     its output does not contain the URL.
+  6. `docs/cache-eval.md` records the hashing baseline from a local run, with its settings.
+- **Verification:** `python scripts/check.py` green; mutation table (`>=` changed to `>` when placing a pair, the
+  hit rate divided by every pair, wrong hits counted on `same` pairs, the sweep missing 0.50 or 1.00, the
+  recommendation taking the highest threshold or allowing 1.00, one cache shared by every pair, the URL printed,
+  a `different` category miscounted, a `Skip` counted as a miss, the thresholds built by adding 0.01 in a loop);
+  `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-304-cache-eval`; `feat(eval): add the cache eval dataset`, `feat(eval): add the
+  cache eval harness`, `docs(eval): record the hashing baseline`, `docs(tasks): complete T-304`.
+- **Size:** about 380 hand-written lines of code, tests and docs, plus the dataset (about 330 lines of JSON).
+
+### T-305 - Build the cache in the app and share the id source
+
+- **Status:** todo
+- **Goal:** with the cache on, the app holds one `InMemorySemanticCache` built from the settings, on the injected
+  clock, and the shared id source is on the app state, so the route can use both. No request uses the cache yet.
+- **Context:** ADR-0014, ADR-0015, `app/main.py`, `app/providers/ids.py`, `app/cache/`, `tests/test_app_wiring.py`,
+  `tests/test_chat_routing.py` (its direct `build_providers(table, FakeClock())` call),
+  `tests/test_app_anthropic.py` (its monkeypatch of `app.main.UuidIdSource`).
+- **Depends on:** T-303, T-304: the harness exists before the cache is built into the app.
+- **Deliverables:**
+  - `create_app()` builds one `UuidIdSource`, keeps it on `app.state.id_source` and passes it to
+    `build_providers`, which gains a keyword `id_source: IdSource | None = None` and builds a new `UuidIdSource`
+    inside the function when it is `None` (never a default evaluated once at import), so existing direct calls
+    keep working. Every provider the app builds uses that one source.
+  - With the cache on, `create_app()` builds an `InMemorySemanticCache` on the embedder (built or injected,
+    T-302), the injected clock, and the threshold, TTL and maximum from `Settings.cache`, and keeps it on
+    `app.state.cache`. With the cache off, `app.state.cache` is `None`.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Every existing test passes unchanged, including the direct `build_providers` call.
+  2. The app's mock, Ollama and Anthropic providers share the source on `app.state.id_source` (a monkeypatched
+     `app.main.UuidIdSource`, as in `tests/test_app_anthropic.py`, shows one instance).
+  3. With the cache on, `app.state.cache` uses the injected clock and the embedder, and the settings' values,
+     each pinned from both sides: an entry still hits just before the TTL and misses at it; a similarity at the
+     threshold hits and one just below it misses; storing exactly the maximum evicts nothing and one more
+     evicts. With the cache off it is `None`.
+- **Verification:** `python scripts/check.py` green; mutation table (a second id source built for the
+  providers, the system clock given to the cache, the threshold, TTL or maximum taken from a constant instead
+  of the settings, the cache built while the cache is off); `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-305-cache-wiring`; `refactor(app): keep the shared id source on the app
+  state`, `feat(app): build the semantic cache from the settings`, `docs(tasks): complete T-305`.
+- **Size:** about 200 lines.
+
+### T-306 - Semantic cache on chat completions
+
+- **Status:** todo
+- **Goal:** the chat route looks up the cache after the reservation. A hit is answered from the cache with a full
+  refund, a `stop` answer is stored after a miss, and every 200 says which happened.
+- **Context:** ADR-0007, ADR-0011, ADR-0014, ADR-0015, `app/api/chat.py`, `app/main.py`, `app/cache/`,
+  `tests/test_chat_rate_limits.py`, `tests/test_chat_routing.py`, `tests/test_chat_completions.py`,
+  `tests/test_chat_openapi.py`, ARCHITECTURE sections 2, 3 and 5.
+- **Depends on:** T-305.
+- **Deliverables:**
+  - The route, after an allowed reservation:
+    - With the cache on (`app.state.cache`), it looks up the request under the caller id.
+    - A hit settles once with an actual amount of 0 and answers the stored response, with a new `id` from
+      `app.state.id_source` and `created` from the clock. It carries the limit headers, `x-tollgate-provider`
+      set to the stored provider, `x-tollgate-fallbacks: 0` and `x-tollgate-cache: hit`.
+    - A miss runs the route. A 200 is then offered to `store`, and the response carries `x-tollgate-cache: miss`.
+    - A skip, or the cache off, runs the route, and a 200 carries `x-tollgate-cache: skip`.
+    - Nothing else changes: the 400, 401, 404, 429 and 502 paths are as today.
+  - The OpenAPI document records `x-tollgate-cache` on 200 with its three values, and the descriptions of
+    `x-tollgate-provider` and `x-tollgate-fallbacks` say what they mean on a hit (ADR-0014). In
+    `tests/test_chat_openapi.py` the exact 200 header set gains `x-tollgate-cache`. The snapshot is regenerated
+    in the route commit.
+  - ARCHITECTURE: section 2 says a hit settles 0. Section 3 replaces the illustrative `SemanticCache` with the
+    final `SemanticCache`, `Hit`, `Miss`, `Skip`, `Embedder` and `EmbeddingError`. Section 5 adds `app/cache/`
+    and the cache to the chat-route paragraph.
+- **Contract:** changes (one header on 200, two header descriptions); the snapshot is regenerated in the route
+  commit.
+- **Acceptance criteria:**
+  1. With the cache off, every behavioural test in `tests/test_chat_rate_limits.py`, `tests/test_chat_routing.py`
+     and `tests/test_chat_completions.py` passes unchanged. Each 200 carries `x-tollgate-cache: skip`, and no
+     embedder is called.
+  2. A miss, then a hit (a fake embedder with fixed vectors and a fixed id source):
+     - The first request is a `miss`, served by the second target of its route after one retryable failure.
+     - The second is a `hit`, and no provider is called again.
+     - On the hit, `model`, `choices` and `usage` equal the stored answer's, the `id` is the id source's next id,
+       and `created` is the clock's time at the hit, which has moved since the miss.
+     - On the hit, `x-tollgate-provider` names the second target (the one that produced the answer), and
+       `x-tollgate-fallbacks` is `0`, while the miss carried `1`.
+  3. A hit makes one reserve and one settle with an actual amount of 0, and a follow-up request shows the balance
+     unchanged by the hit.
+  4. A 429 for a cached prompt, a 404 and a 400 never call the embedder.
+  5. After a `length` answer, the next similar request is a `miss` again. A 502 stores nothing.
+  6. An embedder failure gives a 200 with `skip`, served by the provider, and nothing is stored: the next similar
+     request, with the embedder working, is a `miss` and the provider is called.
+  7. `x-tollgate-cache` is absent on 400, 401, 404, 429 and 502.
+  8. Another caller sending the same prompt gets a `miss`.
+  9. Through the whole app, with a route table and one `httpx.MockTransport` answering both `/api/embed` and
+     `/api/chat`, an Ollama route with the Ollama embedder serves a miss and then a hit.
+- **Verification:** `python scripts/check.py` green; mutation table:
+  - order and cost: the lookup moved before the reservation, a hit settling the stored usage or the reservation,
+    a hit calling the provider
+  - the hit response: the `id` or `created` kept from the stored answer, the fallback count copied from the miss,
+    the provider taken from the route's first target
+  - what is stored: a `length` answer, after a 502, after a skip
+  - the header: on a 400, 401, 404, 429 or 502, a `skip` reported as `miss`
+  - failure and scope: an embedder failure turned into a 500, a constant in place of the caller id
+
+  Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-306-cache-on-chat`; `feat(api): answer chat completions from the semantic
+  cache` (with the regenerated snapshot), `docs(architecture): describe the semantic cache`,
+  `docs(tasks): complete T-306`.
+- **Size:** about 400 lines plus the snapshot diff. It is the card most likely to run over, so its plan goes to
+  the owner if it does.
+
+### T-307 - The owner's eval run, the recommended threshold and the cache guide
+
+- **Status:** todo
+- **Goal:** the threshold the docs recommend comes from a recorded eval run against a local embedding model, and
+  the owner can turn the cache on by hand.
+- **Context:** ADR-0014, ADR-0015, `docs/setup.md`, `docs/cache-eval.md`, `scripts/eval_cache.py`.
+- **Depends on:** T-304, T-306.
+- **Deliverables:**
+  - An OWNER-CHECK: the owner pulls `all-minilm` (or `bge-m3`) into a local Ollama and runs
+    `scripts/eval_cache.py --embedder ollama --model <model>`. The report goes into `docs/cache-eval.md`, and the
+    Log records a summary. The report holds the Ollama version, the model, the dataset digest, the date, the
+    table, and the recommended threshold or none. A second model is optional.
+  - `docs/setup.md`: turning the cache on. It covers the variables, the threshold from the recorded run, what each
+    header value means, what a hit costs, the limits, that a threshold of `1` may never hit, and that each
+    process has its own cache. If the run found no usable threshold, or the owner waived it, the guide says that
+    no threshold is recommended.
+  - An optional OWNER-CHECK: a gateway run with the cache on, with a `miss` and then a `hit` seen in the headers.
+    It is recorded in the Log or marked "not run".
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. OWNER-CHECK: the eval run is recorded in `docs/cache-eval.md` and the Log, with its settings, or the owner
+     waives it in writing.
+  2. The threshold in `docs/setup.md` equals the recorded run's recommendation for that model, or the guide says
+     that none is recommended.
+  3. A search finds no key or real secret in any committed file.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table, and the
+  report says so. `gh pr checks <n> --watch`.
+- **Branch and commits:** `docs/t-307-cache-guide`; `docs(eval): record the owner's eval run`, `docs(setup): add
+  the cache guide`, `docs(tasks): complete T-307`.
+- **Size:** about 120 lines.
+
 ## Later phases (broken into tasks at each gate)
 
 | Phase | Epic |
 | --- | --- |
 | 1 | Token-aware rate limiting: planned 2026-11-12 as T-101 to T-108 (see the current phase) |
 | 2 | Model routing: planned 2026-11-13 as T-201 to T-207; T-208, T-209 and T-210 added 2026-11-14 (see the current phase) |
-| 3 | Semantic caching: embeddings, similarity lookup, thresholds, invalidation |
+| 3 | Semantic caching: planned 2026-11-21 as T-301 to T-307 (see the current phase) |
 | 4 | Docker Compose, observability, reproducible load benchmarks |
 | 5 | Demo and write-up |
 
 ### Requirements that carry into the task cards
 
 These are written into the cards when each phase is planned. The two Phase 1 items are in ADR-0006, T-106 and
-T-107.
+T-107. The Phase 3 item is in ADR-0014, T-304 and T-307.
 
 - **Phase 1, Redis ADR first.** Before the Phase 1 ADR on how the rate limiter talks to Redis, the researcher
   checks, with sources, that every package the Redis and Lua tests would need has a prebuilt wheel for Windows
@@ -1164,6 +1557,16 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   review, owner decision to log it).
 - **IETF RateLimit header fields:** emit `RateLimit` and `RateLimit-Policy` alongside the `x-ratelimit-*`
   headers once draft-ietf-httpapi-ratelimit-headers becomes an RFC and has a unit for tokens (ADR-0008).
+- **Shared semantic cache:** keep cache entries in Redis so that every process shares them, through Redis 8
+  vector sets or the Query Engine. It needs a newer CI Redis image, and fakeredis cannot run `FT.SEARCH`
+  (ADR-0015).
+- **Per-request cache controls:** `Cache-Control: no-cache` (do not read) and `no-store` (do not write) on a
+  chat request; changes the contract (ADR-0014).
+- **Cache purge:** an authenticated way to empty the cache without a restart (ADR-0014).
+- **Request-count limit for cache hits:** a hit costs no tokens, so a caller can repeat cached prompts without
+  limit while the reservation succeeds (ADR-0014).
+- **More embedders:** a prompt-prefix setting for models that need one (`nomic-embed-text`,
+  `mxbai-embed-large`), and an embedder for the OpenAI-compatible `/v1/embeddings` (ADR-0015).
 
 ## Log
 
@@ -1222,3 +1625,5 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-14 | T-210 | Done. `app/providers/fields.py` (new) holds the reply checks the adapters shared: `text`, `non_empty_text`, `whole_number` and `required_count`, each raising `ProviderError("bad_response", status)` after any `try`, never inside an `except`. `app/providers/http_body.py` adds `post_json(client, path, *, body, headers, max_response_bytes) -> JsonReply` (a `NamedTuple` of `payload` and `status_code`) beside `read_capped`: one `POST` through `client.stream`, the status read first, a non-2xx mapped to `rate_limited` (429) or `upstream_status` without reading its body, a 2xx body read with `read_capped` and parsed as UTF-8 JSON, a timeout checked before `httpx.TransportError`, then `httpx.DecodingError`, every error raised after its `except`. The OpenAI and Anthropic adapters call `post_json` and `fields` and lost their own `_text`, `_non_empty_text`, `_whole_number`, `_required_count`, `_status_error`, `RATE_LIMITED_STATUS`, `json` import and exception handling; their four test files are unchanged. Behaviour change, on a line of its own: the Ollama adapter moved onto `post_json` and `fields.text` too, so its errors no longer carry a suppressed `__context__` (it raised `from None` inside its `except` blocks); its absent-is-0 count stays in `ollama.py` on `fields.whole_number`, as does Anthropic's absent-or-null-is-0 cache count. `docs/ARCHITECTURE.md` lists `fields.py` and `post_json`. The contract is unchanged. This closes T-205 known gap 1 (the Ollama `__context__`) and gap 3 (the repeated adapter code), and T-206 known gap 4; T-205 gap 2 (`build_providers` reading `table.api_keys[name]` directly) and gap 4 (no upper bound on `created`, counts capped at settle) stay open. The delivered diff is about 1,220 changed lines (990 added, 228 removed) against the card's about 600: production +167 and -220 (the code shrinks by 53 lines), tests +817 (the card said about 360), docs +6 and -4; the tests ran long on parametrised cases, the 25-case self-test of the AST scanner and the per-failure context checks, as in T-205 and T-206 | `python scripts/check.py` green (1727 passed, 45 deselected; ruff, format, mypy and contract clean); the first commit passes the check on its own (1678 passed, run on a scratch copy of that state). New tests: `tests/test_provider_fields.py` (every rejection at status 201 with no context), `tests/test_http_body.py` (request shape, `headers=None`, 200, 201 and 299, status mapping with no body read, no redirect, each timeout and transport type on send and mid-body, corrupt gzip, invalid UTF-8 and JSON, empty body, deep nesting, the limit exactly and plus 1, no body, URL or header value in any error), `tests/test_adapter_wiring.py` (a 201 that cannot be translated is `bad_response` with 201 for each adapter, the AST test and its scanner self-test), `tests/test_ollama_provider.py` (ten failures with no `__context__` or `__cause__`). Mutation run, one at a time with a timeout, on a scratch copy: 53 mutants, all killed (16 in `fields`, 21 in `post_json` and `read_capped`, 10 in the adapters, 6 extra on the adapters' translation); one timed out on its first run and was killed on two reruns, cause not identified. The verifier failed the first round: the deep-nesting cases used the default 1,024-byte limit, so the 100,000-byte body was rejected as oversize before `json.loads` and the `RecursionError` mutant was killed only by the adapter files; the cases now pass a limit of 200,000 and the mutant is killed in `tests/test_http_body.py` (run after the fix). Three scanner mutants (the first imported name only, the call check removed, any call counted) were killed after the review. Review APPROVE with four Minor findings (stale adapter docstrings, an import check on the first name only, an unused import passing the AST test, one orphaned line in ARCHITECTURE), all fixed. Two test placeholders starting `sk-` were renamed after the verifier's secret scan | `app/providers/fields.py`, `app/providers/http_body.py`, `app/providers/openai.py`, `app/providers/anthropic.py`, `app/providers/ollama.py`, `docs/ARCHITECTURE.md`, `tests/test_provider_fields.py`, `tests/test_http_body.py`, `tests/test_adapter_wiring.py`, `tests/test_ollama_provider.py` |
 | 2026-11-21 | T-207 | Done. `docs/routes.example.json` (new) is a route table with one provider of each real type (`local` ollama, `openai`, `claude` anthropic), a `fast` route (local, then openai) and a `smart` route (claude, then openai), and a default to `local`; keys appear only as `api_key_env` names. `tests/test_routes_example.py` (new) loads it through `Settings.from_env` with placeholder environment values and checks the provider types, the target order of both routes and the default, and that only the `openai` and `claude` providers hold keys, each with the value of its own variable. `docs/setup.md` gains "Running against real providers": the example, copying it outside the repository, the variables to export, a `curl` request, what fallback does, and the timeouts. The contract is unchanged, and no dependency was added. OWNER-CHECK done by the owner on 2026-11-21 against a local Ollama (version 0.40.17), model `llama3.2`: HTTP 200; `usage` `{"prompt_tokens": 28, "completion_tokens": 26, "total_tokens": 54}`; headers `x-ratelimit-limit-tokens: 60000`, `x-ratelimit-remaining-tokens: 59941`, `x-ratelimit-reset-tokens: 1s`, `x-tollgate-provider: local`, `x-tollgate-fallbacks: 0`. Runs against OpenAI and Anthropic: not run. The fallback to a second target with a real provider was not exercised | `python scripts/check.py` passed just now (ruff, format, mypy strict on 74 files, 14 contract tests, 1728 other tests passed, 45 deselected); a search of `docs/` for key patterns (`sk-`, `sk-ant-`, `AKIA`, a Bearer value, an `api_key` value) found no key-shaped value; mutation table for `tests/test_routes_example.py`: 18 mutants, each a changed copy of the example file, run one at a time on scratch copies: an unknown field (on a provider and at the top level), a target naming an undefined provider (in `fast` and in `default`), a reversed `fast` order, two swapped provider types, a missing `api_key_env`, a missing `default_max_tokens`, a changed `default`, a deleted route, an empty route, a deleted `default`, a low `timeout_seconds`, a bad variable name and a duplicate key were all killed; `claude`'s `api_key_env` changed to `OPENAI_API_KEY` survived the first version of the test and was killed once the test also asserted the `claude` key's value (re-run just now); one survivor remains by design, a renamed upstream model, because model names are not part of the schema; reviewer APPROVE with five Minor findings (the guide wording, the `claude` key assertion and this Log wording fixed in this pull request; two long lines in `docs/setup.md` and the unpinned model names accepted); the Ollama run is the owner's report, not a run in this repository |
 | 2026-11-21 | - | Phase 2 gate signed off by the owner: all eight open gate items met (the three ADR items were ticked earlier, on 2026-11-13 and 2026-11-14). T-201 to T-210 are `done` on the board, the last being T-207 (pull request #41, merge commit `8516d0a`). The README and the ARCHITECTURE status line were updated in the close-out pull request: Phase 2 complete, T-201 to T-210 done, the one manual Ollama run recorded as the only real call and as a correctness check, not a measurement, OpenAI and Anthropic never called, the example route table and the real-provider guide listed. Evidence read back the same day, read-only: `ci` run `44911284742` succeeded on `main` at `8516d0a`; `python scripts/check.py` passed locally (14 contract tests, 1728 other tests, 45 deselected); routing tests assert the 404 with no reservation for an unknown model (`test_unknown_model_without_a_default_gets_404_with_no_reservation_and_no_limit_headers`), each target tried once in order, and exactly one reserve and one settle per request, also after a fallback and after every target failed (`tests/test_chat_routing.py`, `tests/test_router.py`); client shutdown is tested in `tests/test_app_wiring.py`; `requirements.txt` and `requirements-dev.txt` name no OpenAI, Anthropic or Ollama package, and a search of `tests/` for socket, urllib, requests and bare httpx client use found none; every Phase 2 card's Log row records a mutation table, and each survivor is explained (T-201 two equivalent, T-208 one equivalent, T-207 one by design, the rest killed in a later round, T-210 one run that timed out and was killed on two reruns with the cause not identified); the Ollama run is recorded in the T-207 row as the owner's report; 196 commits on `main`, all with the owner's author email (the first skeleton commit shows the name `apoorvrajdev`, the rest `Apoorv Raj`) and none with a co-author trailer or attribution line in its message. Phase 3 is not planned yet | `gh run list --branch main`, `python scripts/check.py`, `git log`, `grep` over `requirements*.txt`, `tests/` and `docs/TASKS.md` (all read-only) |
+| 2026-11-21 | - | Phase 3 planned: cards T-301 to T-307, the Phase 3 gate and board rows, and five backlog items for deferred cache work; ADR-0014 (what is compared, who shares an entry, what a hit costs, how the threshold is chosen; amends ADR-0007 and ADR-0011) and ADR-0015 (Ollama `/api/embed`, cosine with `math.sumprod`, the cache in process memory, a hashing baseline for tests) proposed. No dependency is added. Ollama's embed API and source, embedding model licences, `math.sumprod`, numpy wheels, Redis 8 vector search, redis-py 8.1.0, fakeredis 2.40.0 and the semantic caches of LiteLLM, GPTCache, Portkey, Kong, RedisVL, LangCache and Cloudflare were checked on this date; nothing was installed | `docs/DECISIONS.md`; the planning pull request |
+| 2026-11-21 | - | Decisions by the owner: ADR-0014 and ADR-0015 accepted as written, no revisions, and the Phase 3 plan approved. ADR-0007's status is now "Accepted - amended by ADR-0010, ADR-0012 and ADR-0014" and ADR-0011's "Accepted - amended by ADR-0014". The Phase 3 gate item for the ADRs is ticked; T-301 can start once the planning pull request merges | `docs/DECISIONS.md` (index and ADR headers); pull request #43 |
