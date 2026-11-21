@@ -26,3 +26,4 @@ def test_example_route_table_loads_with_placeholder_environment() -> None:
     assert [t.provider for t in table.default] == ["local"]
     assert set(table.api_keys) == {"openai", "claude"}
     assert table.api_keys["openai"].get_secret_value() == "placeholder-openai-value"
+    assert table.api_keys["claude"].get_secret_value() == "placeholder-anthropic-value"
