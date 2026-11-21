@@ -95,7 +95,11 @@ rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 The cache variables follow stricter rules. A cache variable that is set while `TOLLGATE_CACHE_EMBEDDER` is unset
 stops startup and names that variable, even when it is blank: unlike `TOLLGATE_REDIS_URL`, it is never ignored,
 so a threshold set without the embedder cannot leave the cache silently off. Set but blank is always an error and
-never takes a default. The embedder URL is not checked for syntax at startup, only that it is not blank.
+never takes a default. The embedder URL is not checked for syntax at startup, only that it is not blank
+(a malformed one that the HTTP client rejects stops startup naming the variable, never showing the value).
+With the cache on, the app builds the embedder on its own HTTP client (5-second connect timeout, 10 seconds for
+reads, writes and the pool), which it closes at shutdown; no request uses it yet.
+
 ### Route table
 
 The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully

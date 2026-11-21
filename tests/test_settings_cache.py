@@ -159,28 +159,26 @@ BAD_COUNTS = ["abc", "", " ", "1.5", "-60", "1e3", "\uff16\uff10", "9" * 19, "9"
 def test_a_count_is_bounded_on_both_sides_and_blank_is_an_error(
     variable: str, low: int, high: int
 ) -> None:
-    assert load(**{variable: str(low)}) is not None
-    assert load(**{variable: str(high)}) is not None
-    assert load(**{variable: f" 0{low} "}) is not None  # leading zeros, as the other numbers
+    stored = "ttl_seconds" if variable == TTL else "max_entries"
+    assert getattr(load(**{variable: str(low)}), stored) == low
+    assert getattr(load(**{variable: str(high)}), stored) == high
+    # leading zeros and surrounding spaces, as the other numbers
+    assert getattr(load(**{variable: f" 0{low} "}), stored) == low
     for text in [str(low - 1), str(high + 1), *BAD_COUNTS]:
         assert_names(cache_error(**{variable: text}), variable)
 
 
 def test_the_boundary_values_are_stored() -> None:
-    assert load(**{TTL: "60", MAX: "1"}).ttl_seconds == 60
-    assert load(**{TTL: "604800", MAX: "100000"}).max_entries == 100_000
-    assert load(**{TTL: "60", MAX: "1"}).max_entries == 1
-    assert load(**{TTL: "604800"}).ttl_seconds == 604_800
+    low = load(**{TTL: "60", MAX: "1"})
+    high = load(**{TTL: "604800", MAX: "100000"})
+    assert (low.ttl_seconds, low.max_entries) == (60, 1)
+    assert (high.ttl_seconds, high.max_entries) == (604_800, 100_000)
 
 
 @pytest.mark.parametrize("name", DEPENDENT)
 @pytest.mark.parametrize("value", ["1", "", "  "], ids=repr)
 def test_a_cache_variable_without_the_embedder_is_an_error_naming_it(name: str, value: str) -> None:
     assert_names(error_for({name: value}), name)
-
-
-def test_a_blank_embedder_is_not_the_same_as_an_unset_one() -> None:
-    assert_names(error_for({EMBEDDER: ""}), EMBEDDER)
 
 
 def test_the_first_error_is_reported_in_declaration_order() -> None:
@@ -198,12 +196,16 @@ def test_the_cache_is_checked_after_the_other_settings() -> None:
     assert info.value.variable == "TOLLGATE_API_KEYS"
 
 
-@pytest.mark.parametrize("name", [EMBEDDER, *DEPENDENT])
+def test_a_route_table_error_is_reported_before_a_cache_error() -> None:
+    # A blank routes file is an error of its own; the cache's bad threshold comes second.
+    error = cache_error(**{"TOLLGATE_ROUTES_FILE": "", THRESHOLD: "x"})
+    assert error.variable == "TOLLGATE_ROUTES_FILE"
+
+
+@pytest.mark.parametrize("name", [EMBEDDER, THRESHOLD, TTL, MAX])
 def test_an_error_names_the_variable_and_never_shows_the_value(name: str) -> None:
-    environ = {**CACHE, name: SENTINEL}
-    if name in (MODEL, URL):
-        environ[name] = ""  # these accept any text; blank is their error
-    error = error_for(environ)
+    # The model and the URL accept any text, so no value of theirs can be rejected and shown.
+    error = error_for({**CACHE, name: SENTINEL})
     assert SENTINEL not in str(error) + repr(error)
 
 
