@@ -20,6 +20,8 @@ Accepted decisions change only through a new ADR.
 | [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
 | [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
 | [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted | 2026-11-14 |
+| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Proposed | 2026-11-21 |
+| [0015](#adr-0015) | Embeddings from a local Ollama, cosine in the standard library, the cache in process memory | Proposed | 2026-11-21 |
 
 ---
 
@@ -607,6 +609,230 @@ Accepted - amended by ADR-0013 · 2026-11-13
     provider's limit.
   - ADR-0010's status is "Accepted - amended by ADR-0013", and its `bad_response` row names an oversized body.
     Delivered by T-209. Accepted by the owner as written on 2026-11-14.
+
+## ADR-0014
+
+**Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends
+ADR-0007 and ADR-0011)** · Proposed · 2026-11-21
+
+- **Context:** Phase 3 adds the semantic cache that ARCHITECTURE section 2 places after the reservation: a request
+  close in meaning to an earlier one is answered from the cache instead of a provider. The TASKS.md requirement
+  for Phase 3 says a threshold is never chosen without an eval harness. Prior art, checked on 2026-11-21 in each
+  project's documentation and source (LiteLLM and GPTCache on their `main` branches):
+  - What is embedded differs. GPTCache embeds the last message (`last_content`), and Kong embeds the latest
+    message by default (`message_countback: 1`). LiteLLM embeds the text of every message, system prompt
+    included, and says its semantic cache "is designed for single-shot prompts" and "will replay stale
+    responses" on multi-turn traffic. Portkey embeds user text and ignores the system prompt
+    (docs.litellm.ai/docs/proxy/caching_semantic, developer.konghq.com/plugins/ai-semantic-cache/reference,
+    portkey.ai/docs/product/ai-gateway/cache-simple-and-semantic).
+  - What must match exactly also differs. LiteLLM keys every entry on a hash of the request parameters other than
+    the messages, plus the key, team and organisation. Portkey requires an exact `model`, `temperature`,
+    `max_tokens` and other body fields. Kong's cookbook says its cache "doesn't separate responses by AI
+    Consumer". RedisVL and Redis LangCache share entries unless the caller adds filters. Portkey caches only
+    requests of at most 4 messages, and LiteLLM skips requests of more than 4 messages by default.
+  - Thresholds are cosine-based, with no common default. Portkey uses a similarity of 0.95. LangCache uses 0.85,
+    allows 0.5 to 1.0, and recommends 0.8 to 0.9. RedisVL uses a cosine distance of 0.1. LiteLLM has no default
+    and refuses to start without one. Published numbers are vendor-reported. One example, from Actian's blog
+    (2026-11-13), on a Banking77 sample with all-MiniLM-L6-v2: a hit rate of 79.2% with 6.4% false positives at
+    0.80. The same post reports 74 of 75 negated questions served from the cache, and "$2500" matching "$250" at
+    0.962 (<https://www.actian.com/blog/developer/stop-trusting-your-cache-hit-rate-7-tests-show-why/>). vCache
+    (arXiv 2502.03771) shows that a static threshold gives no correctness guarantee.
+  - Leaks between tenants are documented. In Actian's simulation, 67.1% of hits crossed tenant boundaries when
+    the cache had no tenant filter. InputSnatch (arXiv 2411.18191) recovers inputs from the timing of hits in
+    caches shared across users.
+  - On failure, LiteLLM fails open after a 5-second embedding timeout and treats the request as a miss. Kong's
+    `stop_on_failure` defaults to false. GPTCache and RedisVL raise the error to the caller.
+  - On a hit, LiteLLM records a cost of $0 and replays the original `usage`, and GPTCache sets `usage` to zeros.
+    LiteLLM sends `x-litellm-cache-key`, Portkey `x-portkey-cache-status`, Kong `X-Cache-Status` and Cloudflare
+    `cf-aig-cache-status`. No product was found that documents how hits count against a rate limit.
+  - Default lifetimes: Portkey 7 days, Kong 300 seconds; LiteLLM, RedisVL and LangCache have no expiry by
+    default. GPTCache keeps at most 1,000 entries and evicts the least recently used. No product documents
+    invalidation when the embedding model changes.
+- **Options:**
+  - What is embedded: (a) the last message, only when it is a `user` message, with every other part of the
+    request matched exactly; (b) all messages joined together; (c) user text only.
+  - Who shares an entry: (d) only the same caller (API key); (e) every caller.
+  - What a hit costs: (f) nothing: the reservation is refunded in full; (g) the stored answer's usage; (h) the
+    input estimate.
+  - Where the lookup happens: (i) after the reservation, as ARCHITECTURE section 2 shows; (j) before it, so a
+    hit needs no tokens.
+  - When the embedder fails: (k) a miss, and the provider answers (fail open); (l) a 502.
+  - The threshold: (m) a built-in default; (n) required whenever the cache is on, with the value the docs
+    recommend taken from a recorded eval run.
+- **Decision (proposed):** (a), (d), (f), (i), (k) and (n).
+  - **Eligibility.** A request is looked up and stored only when its last message has role `user`. Any other
+    request skips the cache.
+  - **Partition.** An entry can match only when every other part of the request is identical. This covers the
+    caller id (the SHA-256 digest of the API key, T-103), the client's `model` as sent (the alias, not the
+    upstream model), every other request field (`max_completion_tokens`, `max_tokens`, `temperature`, `n`,
+    `stream`, `user`), every earlier message (role, content and name), the last message's `name`, and the
+    embedder's identity (its type and model). A field left out and the same field sent with its default value
+    partition apart (`stream` absent or `false`, `n` absent or `1`). The partition key is the SHA-256 digest of
+    these values as canonical JSON: sorted keys, no whitespace, and every non-ASCII character escaped
+    (`ensure_ascii=True`), so a lone surrogate in `user`, `name` or `model`, which validation accepts, still
+    gives a key. The last message's content is the only text that is embedded.
+  - **Similarity.** Cosine similarity between unit vectors. A hit needs a similarity at least equal to the
+    threshold. Among the entries that pass, the most similar wins, and a tie goes to the most recently stored.
+    Two identical texts can score `0.9999999999999999` after normalisation, so a threshold of `1` may never
+    hit.
+  - **Interface (final once accepted).** `SemanticCache.lookup(caller_id, request)` returns one of three
+    results: `Hit(response, provider_name, similarity)`; `Miss(ticket)`, whose ticket holds the partition key
+    and the vector for a later store; or `Skip()`, when the request is not eligible or the embedder failed.
+    `SemanticCache.store(ticket, response, provider_name) -> bool` reports whether the answer was stored. These
+    replace the illustrative `get` and `put` in ARCHITECTURE section 3.
+  - **Threshold.** `TOLLGATE_CACHE_SIMILARITY_THRESHOLD` is required whenever the cache is on. It is a decimal
+    from 0.5 to 1 with at most 4 decimal places, and there is no default. The value the docs recommend comes
+    from a recorded run of the eval harness against the embedding model it is recommended for. The harness has
+    a fixed set of hand-written prompt pairs, each labelled `same` or `different`, and the `different` pairs
+    include near misses: negation, a changed number, a swapped direction, a changed entity. Each pair runs
+    through the real cache: store an answer for the first prompt, then look up the second. The run reports the
+    hit rate on `same` pairs and the wrong-hit rate on `different` pairs at each threshold from 0.50 to 1.00 in
+    steps of 0.01 (each threshold computed as `i / 100`, so it is the same double that parsing the setting
+    gives), together with its settings. A run in which any lookup is a `Skip` stops with an error and reports
+    nothing, so an embedder outage can never look like zero wrong hits. The recommended threshold is the lowest
+    one below 1 with no wrong hit on the dataset. If no such threshold exists, the docs recommend against using
+    the cache with that model.
+  - **Lookup and cost (amends ADR-0007 and ADR-0011).** The order is: route selection (a 404 still comes
+    first), estimate, reservation (a 429 still comes first, even for a prompt that is cached), then the lookup.
+    A hit runs no target and settles once with an actual amount of 0, so the reservation is refunded in full.
+    A miss runs the route as today and settles as today.
+  - **Hit response (amends ADR-0011's Response bullet).** The stored answer with a new `id` from the injected
+    id source and a new `created` from the injected clock. `model`, `choices` and `usage` are as stored, so
+    `usage` describes the answer as it was first produced. `x-tollgate-provider` names the provider that
+    produced the stored answer, not one that served this request, and `x-tollgate-fallbacks` is `0`. The
+    OpenAPI descriptions of both headers say so. The limit headers come from the reservation, as on every 200.
+  - **Cache header.** Every 200 carries `x-tollgate-cache`, one of `hit`, `miss` (looked up, no match, the
+    provider answered) or `skip` (not looked up: the cache is off, the request is not eligible, or the embedder
+    failed). No other status carries it. The header and its values are recorded in the OpenAPI document.
+  - **What is stored.** After a miss, a 200 with exactly one choice, whose finish reason is `stop`, is stored,
+    unless its JSON body is larger than 65,536 bytes in UTF-8. Nothing is stored after a `skip`, a `length` or
+    `content_filter` finish, or any failure. An entry holds the vector, the response as those UTF-8 JSON bytes
+    (so the cap bounds its size), and the name of the provider that served it. It never holds the API key or
+    the prompt text.
+  - **Embedder failure.** It becomes a `skip`, and the route runs as if the cache were off. Only the embedder's
+    classified failures are caught; any other exception is a bug and remains a 500.
+  - **Invalidation.** Entries expire `TOLLGATE_CACHE_TTL_SECONDS` after they are stored, measured on the
+    injected clock: a whole number from 60 to 604,800, default 3,600. A hit does not extend an entry's life.
+    The cache holds at most `TOLLGATE_CACHE_MAX_ENTRIES` entries: a whole number from 1 to 100,000, default
+    1,000. When it is full, expired entries go first, then the least recently used, where a store and a hit
+    both count as a use. Changing the embedding model changes the partition, so old entries can no longer match.
+    These defaults and bounds are chosen, not measured.
+  - Deferred to the backlog: per-request controls (`Cache-Control: no-cache` and `no-store`), a purge endpoint,
+    a cache shared between processes, and a limit on request count for hits.
+- **Consequences:**
+  - A multi-turn conversation can hit only when every earlier turn is identical, so multi-turn hits are rare
+    but never replay an answer from a different conversation. One caller never receives another caller's
+    answer, so a hit cannot leak data across API keys. Its timing can still reveal a caller's own earlier
+    prompts to anyone holding the same key.
+  - A wrong hit returns an answer to a different question. The eval harness measures this only on its own
+    dataset, and "no wrong hit on the dataset" is not a guarantee. 0 wrong hits out of 40 `different` pairs
+    gives a one-sided 95% upper bound of about 7% (Clopper-Pearson, 1 - 0.05^(1/40)), and about 31% for one
+    category of 8. The threshold is chosen on the same data, so the true rate can be higher still.
+  - A hit costs no tokens, so a caller with a full bucket can repeat cached prompts without limit. Each hit
+    still needs the reservation to succeed at that moment. A request-count limit is a backlog item.
+  - `usage` on a hit is the original answer's, but the limiter charged nothing for it. The `x-tollgate-cache`
+    header says which applies.
+  - Every eligible request now waits for an embedding call before the provider call, even on a miss. Its
+    latency is unknown until Phase 4 measures it.
+  - The contract gains one response header on 200, and the descriptions of `x-tollgate-provider` and
+    `x-tollgate-fallbacks` change. ADR-0008 is not amended: the limit headers are unchanged on every status.
+    `SemanticCache`, `Hit`, `Miss` and `Skip` become final interfaces in ARCHITECTURE section 3.
+  - ADR-0007's status becomes "Accepted - amended by ADR-0010, ADR-0012 and ADR-0014", and ADR-0011's becomes
+    "Accepted - amended by ADR-0014", once this ADR is accepted.
+
+## ADR-0015
+
+**Embeddings from a local Ollama, cosine in the standard library, the cache in process memory** · Proposed ·
+2026-11-21
+
+- **Context:** The cache in ADR-0014 needs an embedding for each eligible request, a similarity search, and a
+  place to keep the entries. Tests have no network (ADR-0004), and ADR-0003 allows only packages with `cp313`
+  wheels for `win_amd64` and Linux. Checked on 2026-11-21 against Ollama's documentation and source (`main`
+  branch; the latest release was v0.40.17, 2026-11-10), the PyPI JSON API, redis.io, and the redis-py v8.1.0 and
+  fakeredis v2.40.0 tags:
+  - Ollama's `POST /api/embed` takes `model` and `input` (a string or a list), plus optional `truncate` (default
+    true), `dimensions`, `keep_alive` and `options`. It returns `{"model", "embeddings": [[...]],
+    "total_duration", "load_duration", "prompt_eval_count"}`. The handler L2-normalises every vector, and a NaN
+    or infinite value is an error. With `truncate: false`, an input longer than the context gets 400 "the input
+    length exceeds the context length". An unknown model gets 404, and errors are `{"error": "<text>"}`. The
+    older `/api/embeddings` is "superseded" and does not normalise. Ollama also serves an OpenAI-compatible
+    `POST /v1/embeddings`, but that endpoint has no `truncate` field (docs.ollama.com/api/embed,
+    ollama/ollama `server/routes.go` and `openai/openai.go`).
+  - Embedding models in the Ollama library: `all-minilm` (384 dimensions, 46 MB, Apache-2.0, no prompt prefix,
+    256 word pieces), `bge-m3` (1,024 dimensions, 1.2 GB, MIT, no prefix), `nomic-embed-text` (768 dimensions,
+    Apache-2.0, needs `search_query:`-style task prefixes), `mxbai-embed-large` and `snowflake-arctic-embed`
+    (1,024 dimensions, Apache-2.0, query prefixes), and `embeddinggemma` (Gemma Terms of Use, task prompts).
+  - `math.sumprod` (Python 3.12 and later) computes a dot product in C. numpy 2.5.5 (BSD-3-Clause and other
+    permissive licences) has the needed wheels, but was uploaded on 2026-11-15, less than two weeks ago.
+  - Vector search on Redis needs Redis 8. Vector sets (`VADD`, `VSIM`) arrived in 8.0.0, marked "preview", and
+    the Query Engine's vector search (`FT.SEARCH` KNN) is built into Redis 8. CI runs `redis:7.4.12`, which has
+    neither. fakeredis 2.40.0 emulates vector sets only with its `vectorset` extra, which pulls in numpy and
+    `jsonpath-ng`, and it has no `FT.*` commands. Redis 8 is licensed RSALv2, SSPLv1 or AGPLv3.
+- **Options:**
+  - Embedder: (a) Ollama `/api/embed` on plain httpx; (b) Ollama's `/v1/embeddings`, which would also fit
+    OpenAI and other compatible servers; (c) an embedding model in process (sentence-transformers or
+    fastembed), which means large new dependencies and a model download at first use.
+  - Similarity: (d) a linear scan with `math.sumprod`, no dependency; (e) numpy.
+  - Storage: (f) in process memory, bounded; (g) Redis vector sets or the Query Engine, shared across processes.
+  - Tests and the eval baseline: (h) a deterministic hashing embedder in the code base, never selectable at
+    run time; (i) fixed vectors only.
+- **Decision (proposed):** (a), (d), (f) and (h).
+  - **Interface (final once accepted).** `Embedder` has an `identity` string and `async def embed(self, text:
+    str) -> array[float]`, which returns a unit vector. Every classified failure raises `EmbeddingError(kind,
+    status_code)`, using ADR-0010's failure kinds, with a message built from the kind and the status only.
+  - **Configuration.** `TOLLGATE_CACHE_EMBEDDER` turns the cache on. Its only accepted value is `ollama`. Unset
+    means the cache is off and every 200 carries `x-tollgate-cache: skip`. With the cache on,
+    `TOLLGATE_CACHE_EMBEDDER_MODEL` is required (surrounding whitespace is stripped), and
+    `TOLLGATE_CACHE_EMBEDDER_URL` is optional, defaulting to `http://localhost:11434`. A variable that is set but
+    blank is an error. ADR-0014 adds the threshold, the lifetime and the maximum number of entries. If any of
+    the other cache variables is set while `TOLLGATE_CACHE_EMBEDDER` is unset, startup fails naming that
+    variable. This differs from `TOLLGATE_REDIS_URL`, which is ignored under the memory backend: an operator who
+    sets a threshold and forgets the embedder would otherwise run with the cache silently off, and believe it
+    on. Every error is a `SettingsError` naming the variable, never the value. The URL is kept as a secret,
+    because it can hold credentials.
+  - **Ollama embedder.** One `httpx.AsyncClient`, built by `create_app()` and closed at shutdown with the
+    others (T-203). It has the fixed 5-second connect timeout and 10 seconds for reads, writes and the pool. Each
+    call is one request with no retry: `POST /api/embed` with `model`, `input` as one string and
+    `"truncate": false`, sent through `post_json`, with the reply capped at 1,048,576 bytes (ADR-0013's helper).
+    The reply must hold exactly one vector: a non-empty list of numbers, not bools, each converted with `float()`
+    and finite (an integer too large for a float is rejected, not raised). The embedder normalises the vector
+    again by its norm `math.sqrt(math.sumprod(v, v))`, and rejects a vector whose norm is zero or not finite.
+    Every vector must have the length of the first one the embedder returned. Every failure (connection,
+    timeout, any non-2xx including the 400 for an over-long input, or a reply that breaks these rules) raises `EmbeddingError`. Its message holds only the kind and the
+    status. Sending `"truncate": false` means a long prompt is never cut down to a prefix that it shares with
+    other prompts; it becomes a `skip` instead (ADR-0014). The 10-second read timeout and the 1,048,576-byte
+    reply cap are chosen, not measured. A float written by JSON takes at most about 24 characters, so a
+    1,024-dimension vector is under 30,000 bytes, far below the cap.
+  - **Identity.** The embedder's identity is `ollama:<model>`, part of the partition key (ADR-0014).
+  - **Search.** Vectors are kept as `array("d")`. A lookup scans only the entries of its partition, and
+    computes each similarity with `math.sumprod`, as a dot product of unit vectors.
+  - **Storage.** One cache per process, in memory, lost on restart. The limits are ADR-0014's maximum number of
+    entries and its 65,536-byte cap on a stored answer, kept as its UTF-8 JSON bytes.
+  - **Hashing embedder.** Lower-cased character trigrams, feature-hashed with BLAKE2b into 512 dimensions and
+    L2-normalised, with identity `hashing:v1`. It needs no dependency and gives the same output in every
+    process. It is a lexical baseline, not a semantic model. Tests and the eval harness's CI run use it, and no
+    setting selects it at run time.
+  - The recommended model for the owner's eval run is `all-minilm` (small, Apache-2.0, no prefix); `bge-m3` is
+    the larger alternative. Models that need a task prefix are not supported until a prefix setting exists.
+- **Consequences:**
+  - No new dependency. The cache works only with an Ollama that has the embedding model pulled. Without one,
+    every eligible request is a `skip`, and requests are still served.
+  - Each worker process has its own cache, so the hit rate falls as processes are added, and a restart empties
+    it. A shared cache on Redis 8 is a backlog item. It would need a newer CI image, and fakeredis cannot run
+    `FT.SEARCH`.
+  - The scan is linear in the size of the partition. With at most 100,000 entries it is bounded, but its cost
+    has not been measured. Phase 4 measures it.
+  - Memory is bounded by the maximum number of entries times the stored answer cap plus the vector, because the
+    answer is kept as bytes. For a 1,024-dimension model that is 1,000 times (65,536 + 8 times 1,024) bytes,
+    about 70 MiB, with the default maximum, and about 7 GiB at the largest allowed maximum of 100,000, plus
+    Python's overhead per object.
+  - Every eligible request waits on the embedder before its provider call. A host that does not answer adds up
+    to the 5-second connect timeout to every eligible request, and the 10-second timeouts apply per network
+    operation, with no total deadline, as for providers (ADR-0011). A refused connection fails at once.
+  - `all-minilm` reads at most 256 word pieces, so with `"truncate": false` a longer prompt is a `skip`.
+    Choosing the model sets the longest prompt the cache can serve.
+  - The prompt text goes to the embedding server. With the default local Ollama it stays on the machine.
+  - The hashing embedder's numbers measure lexical overlap, and every report labels them that way.
 
 ---
 
