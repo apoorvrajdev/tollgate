@@ -13,15 +13,15 @@ Accepted decisions change only through a new ADR.
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
 | [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
-| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010 and ADR-0012 | 2026-11-12 |
+| [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010, ADR-0012 and ADR-0014 | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
 | [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted - amended by ADR-0013 | 2026-11-13 |
-| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted | 2026-11-13 |
+| [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted - amended by ADR-0014 | 2026-11-13 |
 | [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
 | [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted | 2026-11-14 |
-| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Proposed | 2026-11-21 |
-| [0015](#adr-0015) | Embeddings from a local Ollama, cosine in the standard library, the cache in process memory | Proposed | 2026-11-21 |
+| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Accepted | 2026-11-21 |
+| [0015](#adr-0015) | Embeddings from a local Ollama, cosine in the standard library, the cache in process memory | Accepted | 2026-11-21 |
 
 ---
 
@@ -172,8 +172,8 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0007
 
-**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted - amended by ADR-0010
-and ADR-0012 · 2026-11-12
+**Rate-limit semantics: estimated tokens, token bucket, reserve and settle** · Accepted - amended by ADR-0010,
+ADR-0012 and ADR-0014 · 2026-11-12
 
 - **Context:** The limit is in tokens per API key, but the true cost of a request is known only after the
   provider answers. OpenAI says it counts the maximum of `max_tokens` and an estimate "based on the character
@@ -423,8 +423,8 @@ Accepted - amended by ADR-0013 · 2026-11-13
 
 ## ADR-0011
 
-**Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008)** · Accepted ·
-2026-11-13
+**Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008)** · Accepted -
+amended by ADR-0014 · 2026-11-13
 
 - **Context:** The router picks a provider and model for each request (ARCHITECTURE section 2). Prior art,
   checked on 2026-11-13 in each project's documentation and source:
@@ -613,7 +613,7 @@ Accepted - amended by ADR-0013 · 2026-11-13
 ## ADR-0014
 
 **Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends
-ADR-0007 and ADR-0011)** · Proposed · 2026-11-21
+ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
 
 - **Context:** Phase 3 adds the semantic cache that ARCHITECTURE section 2 places after the reservation: a request
   close in meaning to an earlier one is answered from the cache instead of a provider. The TASKS.md requirement
@@ -737,12 +737,13 @@ ADR-0007 and ADR-0011)** · Proposed · 2026-11-21
   - The contract gains one response header on 200, and the descriptions of `x-tollgate-provider` and
     `x-tollgate-fallbacks` change. ADR-0008 is not amended: the limit headers are unchanged on every status.
     `SemanticCache`, `Hit`, `Miss` and `Skip` become final interfaces in ARCHITECTURE section 3.
-  - ADR-0007's status becomes "Accepted - amended by ADR-0010, ADR-0012 and ADR-0014", and ADR-0011's becomes
-    "Accepted - amended by ADR-0014", once this ADR is accepted.
+  - ADR-0007's status is "Accepted - amended by ADR-0010, ADR-0012 and ADR-0014", and ADR-0011's is
+    "Accepted - amended by ADR-0014". Delivered by T-301 to T-307. Accepted by the owner as written on
+    2026-11-21.
 
 ## ADR-0015
 
-**Embeddings from a local Ollama, cosine in the standard library, the cache in process memory** · Proposed ·
+**Embeddings from a local Ollama, cosine in the standard library, the cache in process memory** · Accepted ·
 2026-11-21
 
 - **Context:** The cache in ADR-0014 needs an embedding for each eligible request, a similarity search, and a
@@ -833,6 +834,7 @@ ADR-0007 and ADR-0011)** · Proposed · 2026-11-21
     Choosing the model sets the longest prompt the cache can serve.
   - The prompt text goes to the embedding server. With the default local Ollama it stays on the machine.
   - The hashing embedder's numbers measure lexical overlap, and every report labels them that way.
+  - Delivered by T-301 to T-307. Accepted by the owner as written on 2026-11-21.
 
 ---
 
