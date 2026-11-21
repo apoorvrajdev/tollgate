@@ -82,10 +82,20 @@ invalid. The error names the variable and the reason, never the value. API keys 
 | `TOLLGATE_LIMITER_BACKEND` | `memory` or `redis` (lower case, exact) | `memory` | no |
 | `TOLLGATE_REDIS_URL` | Redis connection URL; may contain a password | none | only when the backend is `redis` |
 | `TOLLGATE_ROUTES_FILE` | Path to a JSON route table (below); surrounding spaces are trimmed, and set but blank is an error | the built-in table: one `mock` provider and a default route to it | no |
+| `TOLLGATE_CACHE_EMBEDDER` | Turns the semantic cache on; the only value is `ollama` (lower case, exact) | unset: the cache is off | no |
+| `TOLLGATE_CACHE_EMBEDDER_MODEL` | The Ollama embedding model, for example `all-minilm`; surrounding spaces are trimmed | none | when the cache is on |
+| `TOLLGATE_CACHE_EMBEDDER_URL` | Base URL of the Ollama server; may contain credentials, so it is masked in `repr()`; set but blank is an error | `http://localhost:11434` | no |
+| `TOLLGATE_CACHE_SIMILARITY_THRESHOLD` | Cosine similarity needed for a hit: `0.5` to `1`, at most 4 decimal places (`0.9`, `0.8750`, `1`, `1.0000`) | none | when the cache is on |
+| `TOLLGATE_CACHE_TTL_SECONDS` | How long an entry lives, a whole number from 60 to 604,800 | `3600` | no |
+| `TOLLGATE_CACHE_MAX_ENTRIES` | Most entries kept, a whole number from 1 to 100,000 | `1000` | no |
 
 Numbers are plain ASCII digits, at most 18: `1_000`, `1e3`, `1.5`, signs and spaces inside the number are
 rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
 
+The cache variables follow stricter rules. A cache variable that is set while `TOLLGATE_CACHE_EMBEDDER` is unset
+stops startup and names that variable, even when it is blank: unlike `TOLLGATE_REDIS_URL`, it is never ignored,
+so a threshold set without the embedder cannot leave the cache silently off. Set but blank is always an error and
+never takes a default. The embedder URL is not checked for syntax at startup, only that it is not blank.
 ### Route table
 
 The route table (ADR-0011) names the providers and the targets that serve each model. It is read and fully
