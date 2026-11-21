@@ -1,8 +1,8 @@
 # Architecture
 
-**Status:** Phase 1 in progress. The app serves `GET /health` and `POST /v1/chat/completions`, which answers
-from a mock provider, behind API key authentication and token-aware rate limiting (tasks T-000 to T-108);
-there is no routing or caching yet.
+**Status:** Phase 2 complete. The app serves `GET /health` and `POST /v1/chat/completions`, which is routed by
+model through a route table to the mock, Ollama, OpenAI or Anthropic provider with ordered fallback, behind API
+key authentication and token-aware rate limiting (tasks T-000 to T-210); there is no caching yet.
 Everything in sections 2 to 4 describes the target design, not current code.
 Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
