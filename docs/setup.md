@@ -178,10 +178,13 @@ and CI never make them. Calls to OpenAI and Anthropic cost money.
    ```
 
    A missing or blank key variable, or any schema error, stops the gateway at startup and names the variable,
-   never the value. For a run against Ollama only, remove the `openai` and `claude` providers and every target
-   that names them, and delete a route left with no target (and make sure Ollama is running with the model pulled, for example `ollama pull llama3.2`).
-3. Send a request. `model` selects the route (`fast` above); a model that is neither a route nor covered by
-   `default` is a 404:
+   never the value. For a run against Ollama only, edit your copy of `routes.example.json`: remove the `openai`
+   and `claude` providers and every target that names them, and delete the `smart` route, which is left with no
+   target (`fast` keeps only `local`, and `default` already points to `local`). Make sure Ollama is running with
+   the model pulled, for example `ollama pull llama3.2`.
+3. Send a request. `model` selects the route (`fast` above). A model that is neither a route nor covered by
+   `default` is a 404, but `routes.example.json` has a `default` to `local`, so with it any other model name goes
+   to `local` and you will not see a 404:
 
    ```bash
    curl -i localhost:8000/v1/chat/completions \
