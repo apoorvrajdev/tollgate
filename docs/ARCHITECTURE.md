@@ -111,7 +111,8 @@ deliberate.
 | --- | --- | --- |
 | `app/` | Gateway code | yes |
 | `tests/` | Unit, integration and contract tests; no network access | yes |
-| `scripts/` | Cross-platform helper scripts, such as `check.py` | yes |
+| `scripts/` | Cross-platform helper scripts, such as `check.py` and `eval_cache.py` (the cache eval run) | yes |
+| `eval/` | Fixed datasets for measurements: `cache_pairs.json`, the cache eval pairs | yes |
 | `docs/` | Architecture, decisions, tasks, setup | yes |
 | `.githooks/` | Commit guards (identity, message, blocked files); need Node.js | yes |
 | `.github/workflows/` | CI | yes |
@@ -131,7 +132,9 @@ loop),
 charge capped at the bucket capacity, ADR-0012), the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
 fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
-behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. Planned: `cache/`.
+behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. `app/cache/` is being
+built (T-306 describes it in full). Among others it includes `evaluation.py`, the eval harness that measures
+hit and wrong-hit rates on `eval/cache_pairs.json` (`docs/cache-eval.md`).
 The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
