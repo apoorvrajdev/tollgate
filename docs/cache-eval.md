@@ -15,8 +15,11 @@ threshold from 0.50 to 1.00, how often a same-meaning pair hits and how often a 
 - 40 `different` pairs need a different answer, 8 in each category, with ids `<category>-01` to `-08`:
   - `unrelated_topic`: different subjects, as a floor.
   - `negation`: "Which foods are good for dogs?" against "Which foods are not good for dogs?".
-  - `changed_number`: "$250" against "$2500", "4 people" against "24 people".
-  - `swapped_order`: Celsius to Fahrenheit against Fahrenheit to Celsius, upload against download.
+  - `changed_number`: "$250" against "$2500", "4 people" against "24 people". The category covers any changed
+    figure, so `changed_number-07` changes a year ("1920" against "1820"), not a quantity.
+  - `swapped_order`: Celsius to Fahrenheit against Fahrenheit to Celsius, upload against download. The category
+    covers a swap of direction as well as of order, so `swapped_order-04` ("rising" against "falling") is a
+    direction swap; the T-304 card names the category "swapped direction or order".
   - `changed_entity`: Austria against Australia, koalas against pandas.
 
 The near-miss categories keep most words the same on purpose: they are the pairs a lexical or semantic match
