@@ -36,7 +36,9 @@ def test_route_documents_exactly_the_200_400_401_404_429_and_502_responses() -> 
 
 def test_limit_headers_are_documented_on_200_429_and_502_and_retry_after_only_on_429() -> None:
     responses = document()["paths"][ROUTE]["post"]["responses"]
-    assert set(responses["200"]["headers"]) == LIMIT_HEADER_NAMES | ROUTING_HEADER_NAMES
+    assert set(responses["200"]["headers"]) == LIMIT_HEADER_NAMES | ROUTING_HEADER_NAMES | {
+        "x-tollgate-cache"
+    }
     assert set(responses["429"]["headers"]) == LIMIT_HEADER_NAMES | {"Retry-After"}
     assert set(responses["502"]["headers"]) == LIMIT_HEADER_NAMES
     assert "headers" not in responses["400"]
@@ -55,6 +57,25 @@ def test_routing_headers_are_documented_on_200_with_their_types() -> None:
     headers = document()["paths"][ROUTE]["post"]["responses"]["200"]["headers"]
     types = {name: headers[name]["schema"]["type"] for name in ROUTING_HEADER_NAMES}
     assert types == {"x-tollgate-provider": "string", "x-tollgate-fallbacks": "integer"}
+
+
+def test_cache_header_is_documented_on_200_with_its_three_values() -> None:
+    headers = document()["paths"][ROUTE]["post"]["responses"]["200"]["headers"]
+    assert headers["x-tollgate-cache"]["schema"] == {
+        "type": "string",
+        "enum": ["hit", "miss", "skip"],
+    }
+    description = headers["x-tollgate-cache"]["description"]
+    for value in ("hit:", "miss:", "skip:"):
+        assert value in description
+
+
+def test_routing_header_descriptions_say_what_they_mean_on_a_cache_hit() -> None:
+    headers = document()["paths"][ROUTE]["post"]["responses"]["200"]["headers"]
+    assert headers["x-tollgate-provider"]["description"].endswith(
+        "; on a cache hit, the provider that produced the stored answer"
+    )
+    assert headers["x-tollgate-fallbacks"]["description"].endswith("; 0 on a cache hit")
 
 
 def test_401_documents_the_www_authenticate_challenge_header() -> None:

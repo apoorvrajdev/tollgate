@@ -2,6 +2,7 @@
 
 from array import array
 from collections.abc import Mapping
+from typing import Literal
 
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.settings import Settings
@@ -47,6 +48,7 @@ class ScriptedProvider:
         reported_model: str = "reported",
         prompt_tokens: int = 20,
         completion_tokens: int = 17,
+        finish_reason: Literal["stop", "length", "content_filter"] = "stop",
         log: list[str] | None = None,
     ) -> None:
         self.name = name
@@ -55,6 +57,7 @@ class ScriptedProvider:
         self._reported_model = reported_model
         self._prompt_tokens = prompt_tokens
         self._completion_tokens = completion_tokens
+        self._finish_reason: Literal["stop", "length", "content_filter"] = finish_reason
         self._log = log if log is not None else []
 
     async def complete(self, request: ChatRequest) -> ChatResponse:
@@ -71,7 +74,7 @@ class ScriptedProvider:
                 Choice(
                     index=0,
                     message=ResponseMessage(role="assistant", content=f"reply from {self.name}"),
-                    finish_reason="stop",
+                    finish_reason=self._finish_reason,
                 )
             ],
             usage=Usage(

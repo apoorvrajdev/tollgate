@@ -21,6 +21,7 @@ import math
 from array import array
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Protocol
 
 from app.api.models import ChatRequest, ChatResponse
 from app.cache.embedder import Embedder, EmbeddingError
@@ -55,6 +56,14 @@ class Skip:
 
 
 type LookupResult = Hit | Miss | Skip
+
+
+class SemanticCache(Protocol):
+    """The cache the chat route uses (ADR-0014): look up under the caller id, store after a miss."""
+
+    async def lookup(self, caller_id: str, request: ChatRequest) -> LookupResult: ...
+
+    def store(self, ticket: Ticket, response: ChatResponse, provider_name: str) -> bool: ...
 
 
 def partition_key(caller_id: str, request: ChatRequest, embedder_identity: str) -> str:
