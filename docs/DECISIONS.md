@@ -669,8 +669,10 @@ ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
     embedder's identity (its type and model). A field left out and the same field sent with its default value
     partition apart (`stream` absent or `false`, `n` absent or `1`). The partition key is the SHA-256 digest of
     these values as canonical JSON: sorted keys, no whitespace, and every non-ASCII character escaped
-    (`ensure_ascii=True`), so a lone surrogate in `user`, `name` or `model`, which validation accepts, still
-    gives a key. The last message's content is the only text that is embedded.
+    (`ensure_ascii=True`), so a lone surrogate in `user` or `name`, which validation accepts, still
+    gives a key. (A lone surrogate in `model` never reaches the cache: validation rejects it with a 400,
+    because `min_length` decodes the text. The key would still not raise.) The last message's content is the
+    only text that is embedded.
   - **Similarity.** Cosine similarity between unit vectors. A hit needs a similarity at least equal to the
     threshold. Among the entries that pass, the most similar wins, and a tie goes to the most recently stored.
     Two identical texts can score `0.9999999999999999` after normalisation, so a threshold of `1` may never
