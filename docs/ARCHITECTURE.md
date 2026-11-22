@@ -2,7 +2,8 @@
 
 **Status:** Phase 2 complete. The app serves `GET /health` and `POST /v1/chat/completions`, which is routed by
 model through a route table to the mock, Ollama, OpenAI or Anthropic provider with ordered fallback, behind API
-key authentication and token-aware rate limiting (tasks T-000 to T-210); there is no caching yet.
+key authentication and token-aware rate limiting (tasks T-000 to T-210). With the cache on, it answers a
+request close in meaning to an earlier one from an in-process semantic cache (T-301 to T-306).
 Everything in sections 2 to 4 describes the target design, not current code.
 Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
@@ -28,8 +29,9 @@ flowchart TB
   E --> RL{Rate limiter<br/>reserve tokens}
   RL -- over limit --> R429[429 with retry hints]
   RL -- allowed --> SC{Semantic cache}
-  SC -- hit --> RESP[Response]
-  SC -- miss --> RT[Router]
+  SC -- hit --> SH[Settle 0:<br/>full refund]
+  SH --> RESP[Response]
+  SC -- miss or skip --> RT[Router]
   RT --> P[Provider adapter]
   P --> ST[Settle: actual usage,<br/>cache store, metrics]
   ST --> RESP
@@ -42,14 +44,15 @@ flowchart TB
 | Token counting | Estimate before the call, settle with the provider's reported usage after | Phase 1 |
 | Rate limiter | Per-key token bucket, state in Redis through redis-py and one Lua script (ADR-0006) | Phase 1 |
 | Router | Route table by model alias (ADR-0011); targets tried in order, each once, moving on only after a retryable failure (ADR-0010); a failed route is refunded, an untranslatable answer charged | Phase 2 |
-| Semantic cache | Embedding of the prompt, similarity lookup, thresholds and invalidation | Phase 3 |
+| Semantic cache | Looked up after the reservation under the caller id; embedding of the last user message, similarity lookup, thresholds and invalidation; a hit settles 0, and only a `stop` answer of at most 65,536 bytes after a miss is stored (ADR-0014, ADR-0015) | Phase 3 |
 | Operations | Docker Compose, metrics, structured logs, load benchmarks | Phase 4 |
 
 ## 3. Core interfaces (target, Phase 1 onwards)
 
 Names are final once an ADR or task card fixes them. `Clock`, `Provider`, `TokenEstimator`,
 `reserved_tokens`, `Decision` and `RateLimiter` are final (tasks T-101 to T-105); `ProviderError`,
-`Route` and `Router` are final (T-201, T-202); `SemanticCache` is still illustrative.
+`Route` and `Router` are final (T-201, T-202); `Embedder`, `EmbeddingError`, `SemanticCache`, `Hit`, `Miss`
+and `Skip` are final (T-301 to T-306, ADR-0014, ADR-0015).
 
 ```python
 class Clock(Protocol):
@@ -91,9 +94,31 @@ class Router(Protocol):
     def select(self, request: ChatRequest) -> Route: ...   # alias, else default,
                                                            # else UnknownModelError
 
+class Embedder(Protocol):
+    @property
+    def identity(self) -> str: ...             # type and model, such as "ollama:all-minilm"
+    async def embed(self, text: str) -> array[float]: ...   # a unit vector
+
+class EmbeddingError(Exception):               # not a ProviderError, so no fallback catches it
+    kind: ProviderErrorKind
+    status_code: int | None
+
+@dataclass(frozen=True, slots=True)
+class Hit:
+    response: ChatResponse
+    provider_name: str                         # the provider that produced the stored answer
+    similarity: float
+
+@dataclass(frozen=True, slots=True)
+class Miss:
+    ticket: Ticket                             # the partition key and the vector, for store()
+
+@dataclass(frozen=True, slots=True)
+class Skip: ...                                # not eligible, or the embedder failed
+
 class SemanticCache(Protocol):
-    async def get(self, request: ChatRequest) -> ChatResponse | None: ...
-    async def put(self, request: ChatRequest, response: ChatResponse) -> None: ...
+    async def lookup(self, caller_id: str, request: ChatRequest) -> Hit | Miss | Skip: ...
+    def store(self, ticket: Ticket, response: ChatResponse, provider_name: str) -> bool: ...
 ```
 
 Interface changes require an ADR.
@@ -132,9 +157,13 @@ loop),
 charge capped at the bucket capacity, ADR-0012), the in-memory token
 bucket, and the Redis token bucket: `redis_limiter.py` running `token_bucket.lua`, unit-tested against
 fakeredis), plus `clock.py`, `settings.py` and `main.py`. The shared limiter
-behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. `app/cache/` is being
-built (T-306 describes it in full). Among others it includes `evaluation.py`, the eval harness that measures
-hit and wrong-hit rates on `eval/cache_pairs.json` (`docs/cache-eval.md`).
+behaviour suite is `tests/limits/behaviour.py`; every limiter's test module runs it. `app/cache/` holds the
+semantic cache: `embedder.py` (the `Embedder` protocol and `EmbeddingError`), `ollama_embedder.py`
+(`OllamaEmbedder`, `POST /api/embed` through `post_json`), `hashing.py` (`HashingEmbedder`, the lexical
+baseline for tests and the eval, never selectable at run time), `semantic.py` (`SemanticCache`, `Hit`, `Miss`,
+`Skip`, `Ticket`, `partition_key` and `InMemorySemanticCache`: partitions, a `math.sumprod` scan, expiry and
+eviction) and `evaluation.py`, the eval harness that measures hit and wrong-hit rates on
+`eval/cache_pairs.json` (`docs/cache-eval.md`).
 The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
@@ -144,8 +173,9 @@ and makes the OpenAPI document record the bearer scheme.
 `create_app()` also builds the `HeuristicEstimator` and the limiter chosen by `TOLLGATE_LIMITER_BACKEND`, on
 the injected clock, and keeps them on `app.state`: `InMemoryRateLimiter`, or `RedisRateLimiter` on an optional
 injected Redis client (tests pass fakeredis) or one built from `TOLLGATE_REDIS_URL`, kept on
-`app.state.redis_client`. Every client `create_app()` builds (one `httpx.AsyncClient` per HTTP provider of the route table, then the Redis
-client built from the URL; an injected client is the caller's) is appended to `app.state.owned_clients`, and the app lifespan closes the
+`app.state.redis_client`. Every client `create_app()` builds (one `httpx.AsyncClient` per HTTP provider of the route table, then the
+embedder's client when the cache is on, then the Redis client built from the URL; an injected client is the caller's) is appended to
+`app.state.owned_clients`, and the app lifespan closes the
 list at shutdown, last built first. A close that raises does not stop the others; once all have been tried the
 errors are raised together as an `ExceptionGroup`, so a failure is never hidden. It also builds the provider
 registry (provider name to `Provider`: a `MockProvider` per `mock` entry, an `OllamaProvider` per `ollama`
@@ -157,10 +187,21 @@ provider's default base URL when `base_url` is absent or empty, their `max_respo
 `httpx.MockTransport`; every route table type has a branch, which mypy checks through `assert_never`) and a
 `TableRouter` on the route table, kept on
 `app.state.providers` and `app.state.router`. The `provider=` keyword sets the entry named `mock` and
-`providers=` then sets entries by name; an entry the route table does not name is never routed to. The chat route reads the registry, the router and the
-limiter from `app.state` on every request. It selects the route first, answering a model that no route
+`providers=` then sets entries by name; an entry the route table does not name is never routed to. With the
+cache on (`TOLLGATE_CACHE_EMBEDDER`), it builds an `OllamaEmbedder` on its own client, or takes the injected
+`embedder=`, kept on `app.state.embedder`, and an `InMemorySemanticCache` on it and the clock, kept on
+`app.state.cache`; both are `None` with the cache off. The id source the providers share is kept on
+`app.state.id_source`. The chat route reads the registry, the router, the limiter, the cache, the id source
+and the clock from `app.state` on every request. It selects the route first, answering a model that no route
 serves with the ADR-0011 404 before any estimate or reservation, and with no limit headers. It then
-reserves the estimate plus the completion allowance under the caller id and answers a refusal with 429.
+reserves the estimate plus the completion allowance under the caller id and answers a refusal with 429, so
+a 404, 400 or 429 never reaches the embedder. With the cache on it then looks the request up under the caller
+id (ADR-0014). A hit runs no target and settles once with 0, refunding the reservation in full, and answers
+the stored response with a new `id` from the id source and `created` from the clock, `x-tollgate-provider`
+naming the provider that produced the stored answer and `x-tollgate-fallbacks: 0`. A miss runs the route, and
+after the settle its 200 is offered to `store`, which keeps only a single `stop` choice of at most 65,536 bytes of JSON. A skip (not eligible,
+or an `EmbeddingError`) runs the route as if the cache were off; any other exception from the lookup is a 500.
+Every 200, and no other status, carries `x-tollgate-cache`: `hit`, `miss` or `skip`.
 `run_route` tries each target once, in order, with the request's `model` replaced by the target's upstream
 model (the client's when it has none), and moves on only after a retryable `ProviderError`. A 200 settles
 once with the serving attempt's `usage.total_tokens`, capped at the bucket capacity (`charged_tokens` with the
