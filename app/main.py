@@ -13,6 +13,7 @@ from app.api.auth import ApiKeyAuthenticator, register_auth_error_handler
 from app.api.errors import register_error_handlers, strip_validation_error_schemas
 from app.cache.embedder import Embedder
 from app.cache.ollama_embedder import OllamaEmbedder
+from app.cache.semantic import InMemorySemanticCache
 from app.clock import Clock, SystemClock
 from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
@@ -21,7 +22,7 @@ from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
 from app.providers.anthropic import DEFAULT_BASE_URL as ANTHROPIC_DEFAULT_BASE_URL
 from app.providers.anthropic import AnthropicProvider
 from app.providers.base import Provider
-from app.providers.ids import UuidIdSource
+from app.providers.ids import IdSource, UuidIdSource
 from app.providers.mock import MockProvider
 from app.providers.ollama import DEFAULT_BASE_URL as OLLAMA_DEFAULT_BASE_URL
 from app.providers.ollama import OllamaProvider
@@ -181,15 +182,21 @@ def build_embedder(
 
 
 def build_providers(
-    table: RouteTable, clock: Clock, http_transport: httpx.AsyncBaseTransport | None = None
+    table: RouteTable,
+    clock: Clock,
+    http_transport: httpx.AsyncBaseTransport | None = None,
+    *,
+    id_source: IdSource | None = None,
 ) -> ProvidersBuild:
     """One provider per entry in the route table, by name, and the HTTP clients it built.
 
+    Every provider that makes ids uses `id_source`; with None a new `UuidIdSource` is built here.
     Every type in the route table is built; mypy checks that each has a branch.
     """
     providers: dict[str, Provider] = {}
     clients: list[AsyncCloseable] = []
-    id_source = UuidIdSource()
+    if id_source is None:
+        id_source = UuidIdSource()
     for name, config in table.providers.items():
         if isinstance(config, MockProviderConfig):
             providers[name] = MockProvider(clock, id_source)
@@ -250,6 +257,9 @@ def create_app(
     With the cache on the app builds an `OllamaEmbedder` on its own client, kept on
     `app.state.embedder`; `embedder` replaces it (and no client is built). Passing one while the
     cache is off raises ValueError, so a test cannot believe it exercises a cache that is not there.
+    The cache is an `InMemorySemanticCache` on that embedder and the clock, kept on
+    `app.state.cache` (None when the cache is off). One `UuidIdSource`, on `app.state.id_source`,
+    serves every provider.
     """
     application = TollgateApp(title="Tollgate", lifespan=_lifespan)
     application.state.owned_clients = []
@@ -261,7 +271,11 @@ def create_app(
     application.state.clock = resolved_clock
     # The providers are built before the limiter, so a limiter error never leaves a Redis client
     # behind; an HTTP client built by then is unopened, and nothing needs to close it.
-    providers_build = build_providers(resolved_settings.route_table, resolved_clock, http_transport)
+    id_source = UuidIdSource()
+    application.state.id_source = id_source
+    providers_build = build_providers(
+        resolved_settings.route_table, resolved_clock, http_transport, id_source=id_source
+    )
     registry = providers_build.providers
     application.state.owned_clients.extend(providers_build.built_clients)
     application.state.embedder = embedder
@@ -270,6 +284,15 @@ def create_app(
             resolved_settings.cache, http_transport
         )
         application.state.owned_clients.append(embedder_client)
+    application.state.cache = None
+    if resolved_settings.cache is not None:
+        application.state.cache = InMemorySemanticCache(
+            application.state.embedder,
+            resolved_clock,
+            similarity_threshold=resolved_settings.cache.similarity_threshold,
+            ttl_seconds=resolved_settings.cache.ttl_seconds,
+            max_entries=resolved_settings.cache.max_entries,
+        )
     if provider is not None:
         registry["mock"] = provider
     if providers is not None:
