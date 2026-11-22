@@ -13,7 +13,7 @@ from app.api.auth import ApiKeyAuthenticator, register_auth_error_handler
 from app.api.errors import register_error_handlers, strip_validation_error_schemas
 from app.cache.embedder import Embedder
 from app.cache.ollama_embedder import OllamaEmbedder
-from app.cache.semantic import InMemorySemanticCache
+from app.cache.semantic import InMemorySemanticCache, SemanticCache
 from app.clock import Clock, SystemClock
 from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
@@ -284,15 +284,16 @@ def create_app(
             resolved_settings.cache, http_transport
         )
         application.state.owned_clients.append(embedder_client)
-    application.state.cache = None
+    cache: SemanticCache | None = None  # typed, so mypy checks the Protocol is satisfied
     if resolved_settings.cache is not None:
-        application.state.cache = InMemorySemanticCache(
+        cache = InMemorySemanticCache(
             application.state.embedder,
             resolved_clock,
             similarity_threshold=resolved_settings.cache.similarity_threshold,
             ttl_seconds=resolved_settings.cache.ttl_seconds,
             max_entries=resolved_settings.cache.max_entries,
         )
+    application.state.cache = cache
     if provider is not None:
         registry["mock"] = provider
     if providers is not None:

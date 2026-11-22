@@ -1,17 +1,29 @@
-"""POST /v1/chat/completions: authenticate, select a route, reserve tokens, try the route, settle.
+"""POST /v1/chat/completions: authenticate, select a route, reserve tokens, look up the cache, try
+the route, settle.
 
-The order is authentication, validation, route selection, estimate, reservation, then each target
-of the route in turn (ADR-0007, ADR-0011). A model that no route serves gets the ADR-0011 404
-before any estimate or reservation, so it carries no limit headers.
+The order is authentication, validation, route selection, estimate, reservation, the semantic cache
+lookup, then each target of the route in turn (ADR-0007, ADR-0011, ADR-0014). A model that no
+route serves gets the ADR-0011 404 before any estimate or reservation, so it carries no limit
+headers, and a 404, 400 or 429 never reaches the embedder.
+
+With the cache on (`app.state.cache`), the request is looked up under the caller id. A hit runs no
+target and settles once with an actual amount of 0, so the reservation is refunded in full; it
+answers the stored response with a new `id` from `app.state.id_source` and `created` from the
+clock, `x-tollgate-provider` naming the provider that produced the stored answer and
+`x-tollgate-fallbacks: 0`. A miss runs the route, and its 200 is offered to the cache after the
+settle. A skip (the request is not eligible, or the embedder failed) or the cache off runs the
+route as if there were no cache. Every 200, and no other status, carries `x-tollgate-cache`:
+`hit`, `miss` or `skip`.
 
 The limiter key is always the authenticated caller id (the SHA-256 digest of the API key, T-103),
 never a value taken from the request, because buckets are never evicted.
 
-There is one reservation and one settle per request. A 200 settles with the usage of the target
-that served it and names that target in `x-tollgate-provider`, with the failed attempts before it
-in `x-tollgate-fallbacks`. A route that ends without an answer gives the ADR-0008 502: a provider
-failure is refunded in full, but an answer that could not be translated (`bad_response`) stays
-charged as reserved, because the provider has probably billed it (ADR-0010). A 200 settles the
+There is one reservation and one settle per request. A 200 from a provider settles with the usage
+of the target that served it and names that target in `x-tollgate-provider`, with the failed
+attempts before it in `x-tollgate-fallbacks`. A route that ends without an answer gives the
+ADR-0008 502: a provider failure is refunded in full, but an answer that could not be translated
+(`bad_response`) stays charged as reserved, because the provider has probably billed it
+(ADR-0010). A 200 from a provider settles the
 reported `total_tokens` capped at the bucket capacity (`decision.limit_tokens`, ADR-0012), so one
 request never charges more than a full bucket; the response's `usage` is the provider's, unchanged.
 
@@ -21,7 +33,8 @@ request sees the settled balance (owner decision, T-108). A 400 is rejected befo
 and carries no limit headers.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -31,10 +44,13 @@ from app.api.auth import UNAUTHORIZED_RESPONSE, AuthenticatedRoute, CallerIdenti
 from app.api.errors import INVALID_REQUEST_ERROR, ErrorBody, ErrorResponse
 from app.api.limit_headers import LIMIT_HEADERS_OPENAPI, RETRY_AFTER_OPENAPI, limit_headers
 from app.api.models import ChatRequest, ChatResponse
+from app.cache.semantic import Hit, Miss, SemanticCache
+from app.clock import Clock
 from app.limits.charge import charged_tokens
 from app.limits.estimate import TokenEstimator, reserved_tokens
 from app.limits.limiter import Decision, RateLimiter
 from app.providers.base import Provider
+from app.providers.ids import IdSource
 from app.routing.router import RouteFailed, Router, UnknownModelError, run_route
 
 RATE_LIMIT_ERROR_TYPE = "tokens"
@@ -46,15 +62,34 @@ MODEL_NOT_FOUND_CODE = "model_not_found"
 MODEL_NOT_FOUND_MESSAGE = "The requested model is not available on this gateway."
 PROVIDER_HEADER = "x-tollgate-provider"
 FALLBACKS_HEADER = "x-tollgate-fallbacks"
+CACHE_HEADER = "x-tollgate-cache"
+CACHE_HIT = "hit"
+CACHE_MISS = "miss"
+CACHE_SKIP = "skip"
 
 ROUTING_HEADERS_OPENAPI: dict[str, dict[str, Any]] = {
     PROVIDER_HEADER: {
-        "description": "The configured name of the provider that served the request",
+        "description": (
+            "The configured name of the provider that served the request; on a cache hit, the "
+            "provider that produced the stored answer"
+        ),
         "schema": {"type": "string"},
     },
     FALLBACKS_HEADER: {
-        "description": "The number of failed attempts before the one that served the request",
+        "description": (
+            "The number of failed attempts before the one that served the request; 0 on a cache hit"
+        ),
         "schema": {"type": "integer"},
+    },
+}
+CACHE_HEADER_OPENAPI: dict[str, dict[str, Any]] = {
+    CACHE_HEADER: {
+        "description": (
+            "hit: answered from the semantic cache, and the reservation refunded in full; miss: "
+            "looked up with no match, and a provider answered; skip: not looked up, because the "
+            "cache is off, the request is not eligible, or the embedder failed"
+        ),
+        "schema": {"type": "string", "enum": [CACHE_HIT, CACHE_MISS, CACHE_SKIP]},
     },
 }
 
@@ -81,6 +116,21 @@ def get_estimator(request: Request) -> TokenEstimator:
     return estimator
 
 
+def get_cache(request: Request) -> SemanticCache | None:
+    cache: SemanticCache | None = request.app.state.cache
+    return cache
+
+
+def get_id_source(request: Request) -> IdSource:
+    id_source: IdSource = request.app.state.id_source
+    return id_source
+
+
+def get_clock(request: Request) -> Clock:
+    clock: Clock = request.app.state.clock
+    return clock
+
+
 def rate_limit_message(decision: Decision, requested_tokens: int) -> str:
     """The 429 message: the limit, the requested amount and the wait (ADR-0008)."""
     if decision.retry_after_seconds is None:
@@ -94,6 +144,20 @@ def rate_limit_message(decision: Decision, requested_tokens: int) -> str:
     )
 
 
+def set_success_headers(
+    response: Response,
+    limits: Mapping[str, str],
+    provider_name: str,
+    fallbacks: int,
+    cache_status: str,
+) -> None:
+    """The headers of a 200: the limit headers, the routing headers and the cache header."""
+    response.headers.update(limits)
+    response.headers[PROVIDER_HEADER] = provider_name
+    response.headers[FALLBACKS_HEADER] = str(fallbacks)
+    response.headers[CACHE_HEADER] = cache_status
+
+
 def error_response(status_code: int, body: ErrorBody, headers: dict[str, str]) -> JSONResponse:
     return JSONResponse(
         status_code=status_code, content=ErrorResponse(error=body).model_dump(), headers=headers
@@ -105,7 +169,9 @@ def error_response(status_code: int, body: ErrorBody, headers: dict[str, str]) -
     response_model=ChatResponse,
     status_code=200,
     responses={
-        200: {"headers": {**LIMIT_HEADERS_OPENAPI, **ROUTING_HEADERS_OPENAPI}},
+        200: {
+            "headers": {**LIMIT_HEADERS_OPENAPI, **ROUTING_HEADERS_OPENAPI, **CACHE_HEADER_OPENAPI}
+        },
         400: {"model": ErrorResponse, "description": "Invalid request"},
         **UNAUTHORIZED_RESPONSE,
         404: {
@@ -135,6 +201,9 @@ async def create_chat_completion(
     route_selector: Annotated[Router, Depends(get_router)],
     limiter: Annotated[RateLimiter, Depends(get_limiter)],
     estimator: Annotated[TokenEstimator, Depends(get_estimator)],
+    cache: Annotated[SemanticCache | None, Depends(get_cache)],
+    id_source: Annotated[IdSource, Depends(get_id_source)],
+    clock: Annotated[Clock, Depends(get_clock)],
 ) -> ChatResponse | JSONResponse:
     try:
         route = route_selector.select(body)
@@ -158,6 +227,20 @@ async def create_chat_completion(
             code=RATE_LIMIT_ERROR_CODE,
         )
         return error_response(429, refusal, headers)
+    cache_status = CACHE_SKIP
+    store_answer: Callable[[ChatResponse, str], bool] | None = None
+    if cache is not None:
+        # An EmbeddingError is already a Skip; any other exception is a bug, a 500 that stays
+        # charged as reserved, like a limiter error (ADR-0014).
+        looked_up = await cache.lookup(key, body)
+        if isinstance(looked_up, Hit):
+            await limiter.settle(key, requested_tokens, 0)
+            set_success_headers(response, headers, looked_up.provider_name, 0, CACHE_HIT)
+            fresh = {"id": id_source.next_id(), "created": int(clock.now_seconds())}
+            return looked_up.response.model_copy(update=fresh)
+        if isinstance(looked_up, Miss):
+            cache_status = CACHE_MISS
+            store_answer = partial(cache.store, looked_up.ticket)
     # run_route guards only the provider calls, so a limiter error is never refunded, and the
     # exception text is never sent, because it can hold provider internals.
     outcome = await run_route(route, providers, body)
@@ -173,7 +256,7 @@ async def create_chat_completion(
         return error_response(502, failure, headers)
     settled_tokens = charged_tokens(outcome.completion.usage.total_tokens, decision.limit_tokens)
     await limiter.settle(key, requested_tokens, settled_tokens)
-    response.headers.update(headers)
-    response.headers[PROVIDER_HEADER] = outcome.provider_name
-    response.headers[FALLBACKS_HEADER] = str(outcome.fallbacks)
+    if store_answer is not None:  # after the settle, so a settle error stores nothing
+        store_answer(outcome.completion, outcome.provider_name)
+    set_success_headers(response, headers, outcome.provider_name, outcome.fallbacks, cache_status)
     return outcome.completion

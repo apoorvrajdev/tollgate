@@ -382,14 +382,25 @@
                   "type": "string"
                 }
               },
+              "x-tollgate-cache": {
+                "description": "hit: answered from the semantic cache, and the reservation refunded in full; miss: looked up with no match, and a provider answered; skip: not looked up, because the cache is off, the request is not eligible, or the embedder failed",
+                "schema": {
+                  "enum": [
+                    "hit",
+                    "miss",
+                    "skip"
+                  ],
+                  "type": "string"
+                }
+              },
               "x-tollgate-fallbacks": {
-                "description": "The number of failed attempts before the one that served the request",
+                "description": "The number of failed attempts before the one that served the request; 0 on a cache hit",
                 "schema": {
                   "type": "integer"
                 }
               },
               "x-tollgate-provider": {
-                "description": "The configured name of the provider that served the request",
+                "description": "The configured name of the provider that served the request; on a cache hit, the provider that produced the stored answer",
                 "schema": {
                   "type": "string"
                 }
