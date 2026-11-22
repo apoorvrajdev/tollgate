@@ -13,6 +13,7 @@ from app.api.auth import ApiKeyAuthenticator, register_auth_error_handler
 from app.api.errors import register_error_handlers, strip_validation_error_schemas
 from app.cache.embedder import Embedder
 from app.cache.ollama_embedder import OllamaEmbedder
+from app.cache.semantic import InMemorySemanticCache
 from app.clock import Clock, SystemClock
 from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
@@ -256,7 +257,9 @@ def create_app(
     With the cache on the app builds an `OllamaEmbedder` on its own client, kept on
     `app.state.embedder`; `embedder` replaces it (and no client is built). Passing one while the
     cache is off raises ValueError, so a test cannot believe it exercises a cache that is not there.
-    One `UuidIdSource`, on `app.state.id_source`, serves every provider.
+    The cache is an `InMemorySemanticCache` on that embedder and the clock, kept on
+    `app.state.cache` (None when the cache is off). One `UuidIdSource`, on `app.state.id_source`,
+    serves every provider.
     """
     application = TollgateApp(title="Tollgate", lifespan=_lifespan)
     application.state.owned_clients = []
@@ -281,6 +284,15 @@ def create_app(
             resolved_settings.cache, http_transport
         )
         application.state.owned_clients.append(embedder_client)
+    application.state.cache = None
+    if resolved_settings.cache is not None:
+        application.state.cache = InMemorySemanticCache(
+            application.state.embedder,
+            resolved_clock,
+            similarity_threshold=resolved_settings.cache.similarity_threshold,
+            ttl_seconds=resolved_settings.cache.ttl_seconds,
+            max_entries=resolved_settings.cache.max_entries,
+        )
     if provider is not None:
         registry["mock"] = provider
     if providers is not None:
