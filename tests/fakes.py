@@ -1,5 +1,8 @@
 """Test doubles shared across tests."""
 
+from array import array
+from collections.abc import Mapping
+
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.settings import Settings
 
@@ -77,6 +80,35 @@ class ScriptedProvider:
                 total_tokens=self._prompt_tokens + self._completion_tokens,
             ),
         )
+
+
+class FakeEmbedder:
+    """An embedder that returns the fixed vector for each text, records each text in `calls`,
+    and raises `error` instead when one is set. Vectors are returned as given, not normalised,
+    so a test controls every similarity exactly.
+    """
+
+    def __init__(
+        self,
+        vectors: Mapping[str, tuple[float, ...]] | None = None,
+        *,
+        identity: str = "fake:v1",
+        error: Exception | None = None,
+    ) -> None:
+        self.vectors = dict(vectors or {})
+        self.calls: list[str] = []
+        self.error = error
+        self._identity = identity
+
+    @property
+    def identity(self) -> str:
+        return self._identity
+
+    async def embed(self, text: str) -> array[float]:
+        self.calls.append(text)
+        if self.error is not None:
+            raise self.error
+        return array("d", self.vectors[text])
 
 
 class FakeClient:
