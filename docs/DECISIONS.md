@@ -12,19 +12,19 @@ Accepted decisions change only through a new ADR.
 | [0003](#adr-0003) | Python toolchain, one check command, plain pip | Accepted | 2026-11-09 |
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
-| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
+| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted - amended by ADR-0017 | 2026-11-12 |
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010, ADR-0012 and ADR-0014 | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
 | [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted - amended by ADR-0013 | 2026-11-13 |
 | [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted - amended by ADR-0014 | 2026-11-13 |
 | [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
-| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted | 2026-11-14 |
-| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Accepted | 2026-11-21 |
+| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted - amended by ADR-0016 | 2026-11-14 |
+| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Accepted - amended by ADR-0016 | 2026-11-21 |
 | [0015](#adr-0015) | Embeddings from a local Ollama, cosine in the standard library, the cache in process memory | Accepted | 2026-11-21 |
-| [0016](#adr-0016) | Observability: a JSON request log and Prometheus metrics with the standard library, from bounded fields only (amends ADR-0013 and ADR-0014) | Proposed | 2026-11-23 |
-| [0017](#adr-0017) | Container image, Docker Compose, and the deployment target: one host (amends ADR-0006) | Proposed | 2026-11-23 |
-| [0018](#adr-0018) | Load benchmarks: a fixed arrival rate measured from the due time, a fake upstream, recorded runs only | Proposed | 2026-11-23 |
+| [0016](#adr-0016) | Observability: a JSON request log and Prometheus metrics with the standard library, from bounded fields only (amends ADR-0013 and ADR-0014) | Accepted | 2026-11-23 |
+| [0017](#adr-0017) | Container image, Docker Compose, and the deployment target: one host (amends ADR-0006) | Accepted | 2026-11-23 |
+| [0018](#adr-0018) | Load benchmarks: a fixed arrival rate measured from the due time, a fake upstream, recorded runs only | Accepted | 2026-11-23 |
 
 ---
 
@@ -115,7 +115,7 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0006
 
-**Redis client, Lua token bucket and how it is tested** · Accepted · 2026-11-12
+**Redis client, Lua token bucket and how it is tested** · Accepted - amended by ADR-0017 · 2026-11-12
 
 - **Context:** The rate limiter keeps one bucket per API key, shared by every gateway instance, and each
   reservation must read, refill and update the bucket in one atomic step. ADR-0003 allows only packages with
@@ -549,7 +549,7 @@ amended by ADR-0014 · 2026-11-13
 
 ## ADR-0013
 
-**Cap the size of a provider reply (amends ADR-0010)** · Accepted · 2026-11-14
+**Cap the size of a provider reply (amends ADR-0010)** · Accepted - amended by ADR-0016 · 2026-11-14
 
 - **Context:** The Ollama adapter (T-204) opens the reply with `client.stream` and reads it whole with
   `response.aread()`, which joins every decoded chunk in memory, so a 2xx body of any size is held in full before
@@ -616,7 +616,7 @@ amended by ADR-0014 · 2026-11-13
 ## ADR-0014
 
 **Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends
-ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
+ADR-0007 and ADR-0011)** · Accepted - amended by ADR-0016 · 2026-11-21
 
 - **Context:** Phase 3 adds the semantic cache that ARCHITECTURE section 2 places after the reservation: a request
   close in meaning to an earlier one is answered from the cache instead of a provider. The TASKS.md requirement
@@ -846,7 +846,7 @@ ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
 ## ADR-0016
 
 **Observability: a JSON request log and Prometheus metrics with the standard library, from bounded fields only
-(amends ADR-0013 and ADR-0014)** · Proposed · 2026-11-23
+(amends ADR-0013 and ADR-0014)** · Accepted · 2026-11-23
 
 - **Context:** Phase 4 makes the gateway observable. Earlier ADRs left gaps that only this closes. Nothing
   records that the settle cap applied (ADR-0012) or that a reply passed its size cap (ADR-0013). An embedder
@@ -981,15 +981,14 @@ ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
   - The middleware sees every request, including a 401 before the body is read. A 400 or a 401 has only the
     base fields.
   - `MonotonicClock`, `Attempt`, `ReplyTooLargeError` and the `reason` of `Skip` join ARCHITECTURE section 3.
-    ADR-0013's status becomes "Accepted - amended by ADR-0016", and ADR-0014's "Accepted - amended by
-    ADR-0016".
-  - Delivered by T-401 to T-404.
+    ADR-0013's status is "Accepted - amended by ADR-0016", and ADR-0014's "Accepted - amended by ADR-0016".
+  - Delivered by T-401 to T-404. Accepted by the owner as written on 2026-11-23.
 
 ---
 
 ## ADR-0017
 
-**Container image, Docker Compose, and the deployment target: one host (amends ADR-0006)** · Proposed ·
+**Container image, Docker Compose, and the deployment target: one host (amends ADR-0006)** · Accepted ·
 2026-11-23
 
 - **Context:** The deployment target is decided in a Phase 4 ADR (TASKS.md, "Requirements that carry into the
@@ -1071,15 +1070,15 @@ ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
   - Redis's licence is recorded: the stack runs Redis unmodified from its official image, under RSALv2 or
     SSPLv1, and the repository's MIT code is unaffected.
   - Without a hosted instance there is no public demo URL; Phase 5 decides.
-  - ADR-0006's status becomes "Accepted - amended by ADR-0017".
-  - Delivered by T-405 and T-409.
+  - ADR-0006's status is "Accepted - amended by ADR-0017".
+  - Delivered by T-405 and T-409. Accepted by the owner as written on 2026-11-23.
 
 ---
 
 ## ADR-0018
 
 **Load benchmarks: a fixed arrival rate measured from the due time, a fake upstream, recorded runs only** ·
-Proposed · 2026-11-23
+Accepted · 2026-11-23
 
 - **Context:** The README has no performance figure, and ADR-0005 requires every number to come from a recorded
   run with its settings. Phase 4 measures the latency the gateway adds and its throughput with each limiter,
@@ -1177,7 +1176,9 @@ Proposed · 2026-11-23
     own work only as far as that work does not depend on the upstream's timing.
   - 100,000 entries of 1,024 dimensions hold about 800 MB of vectors (100,000 x 1,024 x 8 bytes). A machine
     without the memory skips that combination, and the report says so.
-  - Delivered by T-406 to T-409.
+  - The 10% lag threshold is a chosen operating margin, not measured from data.
+  - Delivered by T-406 to T-409. Accepted by the owner on 2026-11-23, with the line on the lag threshold
+    added.
 
 ---
 
