@@ -12,16 +12,19 @@ Accepted decisions change only through a new ADR.
 | [0003](#adr-0003) | Python toolchain, one check command, plain pip | Accepted | 2026-11-09 |
 | [0004](#adr-0004) | OpenAI-compatible API; providers added in a fixed order; no paid calls in tests | Accepted | 2026-11-12 |
 | [0005](#adr-0005) | Verification safeguards: contract snapshot, mutation checks, evidence-first numbers | Accepted | 2026-11-12 |
-| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted | 2026-11-12 |
+| [0006](#adr-0006) | Redis client, Lua token bucket and how it is tested | Accepted - amended by ADR-0017 | 2026-11-12 |
 | [0007](#adr-0007) | Rate-limit semantics: estimated tokens, token bucket, reserve and settle | Accepted - amended by ADR-0010, ADR-0012 and ADR-0014 | 2026-11-12 |
 | [0008](#adr-0008) | HTTP contract for authentication, limit headers and errors | Accepted - amended by ADR-0009, ADR-0010 and ADR-0011 | 2026-11-12 |
 | [0009](#adr-0009) | Validation error codes and `param` format (extends ADR-0008) | Accepted | 2026-11-13 |
 | [0010](#adr-0010) | Provider adapters: plain httpx, translation rules and a failure taxonomy (amends ADR-0007 and ADR-0008) | Accepted - amended by ADR-0013 | 2026-11-13 |
 | [0011](#adr-0011) | Routing: a route table file, ordered fallback on retryable failures (amends ADR-0008) | Accepted - amended by ADR-0014 | 2026-11-13 |
 | [0012](#adr-0012) | Cap the tokens a settle charges at the bucket capacity (amends ADR-0007) | Accepted | 2026-11-14 |
-| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted | 2026-11-14 |
-| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Accepted | 2026-11-21 |
+| [0013](#adr-0013) | Cap the size of a provider reply (amends ADR-0010) | Accepted - amended by ADR-0016 | 2026-11-14 |
+| [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Accepted - amended by ADR-0016 | 2026-11-21 |
 | [0015](#adr-0015) | Embeddings from a local Ollama, cosine in the standard library, the cache in process memory | Accepted | 2026-11-21 |
+| [0016](#adr-0016) | Observability: a JSON request log and Prometheus metrics with the standard library, from bounded fields only (amends ADR-0013 and ADR-0014) | Accepted | 2026-11-23 |
+| [0017](#adr-0017) | Container image, Docker Compose, and the deployment target: one host (amends ADR-0006) | Accepted | 2026-11-23 |
+| [0018](#adr-0018) | Load benchmarks: a fixed arrival rate measured from the due time, a fake upstream, recorded runs only | Accepted | 2026-11-23 |
 
 ---
 
@@ -112,7 +115,7 @@ Accepted decisions change only through a new ADR.
 
 ## ADR-0006
 
-**Redis client, Lua token bucket and how it is tested** · Accepted · 2026-11-12
+**Redis client, Lua token bucket and how it is tested** · Accepted - amended by ADR-0017 · 2026-11-12
 
 - **Context:** The rate limiter keeps one bucket per API key, shared by every gateway instance, and each
   reservation must read, refill and update the bucket in one atomic step. ADR-0003 allows only packages with
@@ -546,7 +549,7 @@ amended by ADR-0014 · 2026-11-13
 
 ## ADR-0013
 
-**Cap the size of a provider reply (amends ADR-0010)** · Accepted · 2026-11-14
+**Cap the size of a provider reply (amends ADR-0010)** · Accepted - amended by ADR-0016 · 2026-11-14
 
 - **Context:** The Ollama adapter (T-204) opens the reply with `client.stream` and reads it whole with
   `response.aread()`, which joins every decoded chunk in memory, so a 2xx body of any size is held in full before
@@ -613,7 +616,7 @@ amended by ADR-0014 · 2026-11-13
 ## ADR-0014
 
 **Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends
-ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
+ADR-0007 and ADR-0011)** · Accepted - amended by ADR-0016 · 2026-11-21
 
 - **Context:** Phase 3 adds the semantic cache that ARCHITECTURE section 2 places after the reservation: a request
   close in meaning to an earlier one is answered from the cache instead of a provider. The TASKS.md requirement
@@ -837,6 +840,345 @@ ADR-0007 and ADR-0011)** · Accepted · 2026-11-21
   - The prompt text goes to the embedding server. With the default local Ollama it stays on the machine.
   - The hashing embedder's numbers measure lexical overlap, and every report labels them that way.
   - Delivered by T-301 to T-307. Accepted by the owner as written on 2026-11-21.
+
+---
+
+## ADR-0016
+
+**Observability: a JSON request log and Prometheus metrics with the standard library, from bounded fields only
+(amends ADR-0013 and ADR-0014)** · Accepted · 2026-11-23
+
+- **Context:** Phase 4 makes the gateway observable. Earlier ADRs left gaps that only this closes. Nothing
+  records that the settle cap applied (ADR-0012) or that a reply passed its size cap (ADR-0013). An embedder
+  failure is a `skip` that looks like an ineligible request (ADR-0014). The embedding call's latency and the
+  cache scan's cost are unmeasured (ADR-0014, ADR-0015). Checked on 2026-11-23 against the PyPI JSON API, the
+  prometheus/client_python v0.26.0 tag, prometheus.io, the installed fastapi 0.162.2 source, the uvicorn 0.54.0
+  tag and docs.python.org (3.13):
+  - The Prometheus text format 0.0.4 is UTF-8 with `\n` line endings and a final line feed. HELP text escapes
+    `\\` and `\n`, and label values escape `\\`, `\"` and `\n`. A name has at most one TYPE and one HELP line,
+    and TYPE comes before its first sample. A histogram has cumulative `_bucket{le="..."}` series ending in
+    `le="+Inf"`, which equals `_count`, plus `_sum`. Prometheus 3 fails a scrape whose Content-Type is missing
+    or unknown, and accepts `text/plain; version=0.0.4` (prometheus.io/docs/instrumenting/exposition_formats/,
+    prometheus.io/docs/prometheus/latest/migration/).
+  - Naming practice: base units (seconds, bytes) and `_total` on counters. Labels must not hold unbounded sets
+    such as user ids. Keep a metric's cardinality below about 10 and reconsider it above 100, and export 0 for
+    label sets known in advance (prometheus.io/docs/practices/naming/,
+    prometheus.io/docs/practices/instrumentation/).
+  - `prometheus_client` 0.26.0 (uploaded 2026-07-24, Apache-2.0 AND BSD-2-Clause, a `py3-none-any` wheel with
+    `py.typed`, no runtime dependency). Registering a metric name twice in its default global registry raises
+    an error for duplicated timeseries, so a second app built in one process, as the tests do, needs its own
+    `CollectorRegistry`. It exports `_created` series by default. Its multiprocess mode needs a directory set
+    before the module is imported and wiped between runs, and its documentation describes gunicorn only.
+  - The OpenTelemetry route needs `opentelemetry-sdk` 1.45.2, `opentelemetry-semantic-conventions` 0.66b2 and
+    `opentelemetry-exporter-prometheus` 0.66b2. The exporter is a Beta release, and its README says it has no
+    multiprocessing support.
+  - fastapi 0.162.2 depends on `opentelemetry-api` (since 0.142.0) for its native telemetry: HTTP spans and an
+    `http.server.request.duration` metric. It is active only once a global tracer, meter or logger provider
+    other than the default proxy is set, and the `telemetry=` argument of `FastAPI` turns each part off
+    (`fastapi/telemetry/_asgi.py`, `fastapi/applications.py`).
+  - A Prometheus scrape job sends a bearer token through `authorization: {type: Bearer, credentials_file: ...}`
+    (prometheus.io/docs/prometheus/latest/configuration/configuration/).
+  - `json.dumps` with the default `ensure_ascii=True` escapes every non-ASCII and control character, so one
+    record stays on one line. uvicorn 0.54.0 takes `--log-config <file>.json` (a `logging.config.dictConfig`
+    dictionary) and `--no-access-log`.
+  - In CPython 3.13 `time.perf_counter` is the same clock as `time.monotonic` (QueryPerformanceCounter on
+    Windows). The injected `Clock` (`app/clock.py`) is the wall clock `time.time()`, which can step, so it
+    cannot time a request.
+- **Options:**
+  - Metrics: (a) a small module that writes the text format itself, with the standard library; (b)
+    `prometheus_client` with a registry per app; (c) the OpenTelemetry SDK and its Prometheus exporter.
+  - Logs: (d) the standard `logging` module with a JSON formatter; (e) structlog or python-json-logger.
+  - Where metrics are served: (f) `/metrics` on the API port, behind a token of its own; (g) a second port.
+  - What a label or a log field may hold: (h) only values from sets fixed by the code or the route table;
+    (i) also request values such as the model or the caller.
+- **Decision (proposed):** (a), (d), (f) and (h).
+  - **Timing.** A new interface, final once accepted: `MonotonicClock` with `monotonic_seconds() -> float`.
+    `SystemMonotonicClock` reads `time.perf_counter()`. `create_app()` takes an optional `monotonic_clock=`,
+    and tests inject a fake. No duration is ever taken from the `Clock`.
+  - **What a request reports.** `run_route` returns `attempts: tuple[Attempt, ...]` on both outcomes, one per
+    target tried. An `Attempt` holds the provider name, the outcome and the duration on the monotonic clock.
+    The outcome is `ok`, one of ADR-0010's five failure kinds, `reply_too_large`, or `error` (an exception that
+    is not a `ProviderError`). ADR-0013's cap raises `ReplyTooLargeError`, a subclass of `ProviderError` with
+    kind `bad_response`, so every existing check of the kind behaves as before (amends ADR-0013). `Skip` gains
+    `reason: Literal["not_eligible", "embedder_failed"]` (amends ADR-0014's interface). The chat route records
+    the reserved tokens, the charged tokens, whether `charged_tokens` capped the settle, the cache result and
+    the lookup's duration.
+  - **Log.** One record per HTTP request, on the logger `tollgate.request` at INFO. A pure ASGI middleware
+    writes it once the response has been sent, or once the handler has raised. `JsonFormatter` renders each
+    record as one JSON object, with `ensure_ascii=True` and `allow_nan=False`. The app installs no handler.
+    The committed `deploy/logging.json` is a dictConfig file for `uvicorn --log-config`. It sends
+    `tollgate.request` and uvicorn's own loggers to stdout as JSON. The image runs with `--no-access-log`, so
+    each request is logged once.
+  - **Other loggers.** A record from any other logger (uvicorn's, or a library's) is written with `time`,
+    `level`, `logger` and `message` only. When it carries an exception, `JsonFormatter` adds `exception_type`
+    (the class name) and writes neither the exception's message nor the traceback. An exception text can echo
+    provider internals or a prompt (`app/api/chat.py`), and uvicorn logs every unhandled exception.
+  - **Log fields.** This is the full set, and a test pins it: `time` (UTC, ISO 8601, from the log record's
+    creation time, so a test pins its format, not its value), `level`, `logger`,
+    `event` (`http_request`), `method`, `path` (`/v1/chat/completions`, `/health` or `/metrics`, and `other` for
+    every other path, FastAPI's `/openapi.json`, `/docs` and `/redoc` included),
+    `status` and `duration_seconds`. A chat request that reached the route handler also has `provider` (the
+    serving provider, or null), `fallbacks`, `cache` (`hit`, `miss`, `skip`, or null when no lookup ran),
+    `skip_reason`, `reserved_tokens`, `charged_tokens`, `settle_capped` and `attempts` (each with its provider,
+    outcome and duration). The log never holds the prompt, the messages, the model, the API key or its digest,
+    the caller id, a header value, the query string or the client address. Provider names come from the route
+    table and may hold any printable ASCII character; JSON escaping keeps them safe.
+  - **Metrics.** `app/observability/metrics.py` holds counters and histograms. Every label value comes from a
+    set bounded by the code or the route table, never from the request. The label sets known at startup are
+    exported at 0, and only `status` adds series on first use. It writes text format 0.0.4 with the
+    Content-Type `text/plain; version=0.0.4; charset=utf-8`, and no `_created` series. Each app has its own
+    registry, on `app.state.metrics`. The set:
+    - `tollgate_http_requests_total{path, status}` and the histogram
+      `tollgate_http_request_duration_seconds{path}`
+    - `tollgate_chat_completions_total{provider, cache}`, counted on each 200, with `cache` one of `hit`,
+      `miss`, `skip` and `off` (the cache is off; the header then says `skip`)
+    - `tollgate_provider_attempts_total{provider, outcome}` and the histogram
+      `tollgate_provider_attempt_duration_seconds{provider}`
+    - `tollgate_cache_lookups_total{result}` (`hit`, `miss`, `not_eligible`, `embedder_failed`) and the
+      histogram `tollgate_cache_lookup_duration_seconds`
+    - `tollgate_tokens_reserved_total`, `tollgate_tokens_charged_total` and `tollgate_settle_capped_total`,
+      with no label
+    - Histogram buckets, in seconds: 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+      60 and `+Inf`. They are chosen to span a mock call and a slow provider call, not measured.
+    - `path` takes the same values as the log field: `/v1/chat/completions`, `/health`, `/metrics` (while the
+      endpoint exists) and `other`, which covers every other path, served or not. `status` takes the statuses
+      the app and Starlette answer, so its set is bounded by the code, not by the caller. It is not exported
+      in advance: a `{path, status}` series appears at its first request. Every other label set is exported
+      at 0 at startup: each path for the duration histogram, each route-table provider with each `cache` value
+      and with each of the 8 outcomes, and each lookup `result`.
+  - **Endpoint.** `GET /metrics` exists only when `TOLLGATE_METRICS_TOKEN` is set. Unset, it is a 404 like any
+    unknown path. The token must not be blank, must be at least 32 characters, and must differ from every API
+    key; otherwise startup fails with a `SettingsError` naming the variable, never the value. A request must
+    carry `Authorization: Bearer <token>`. The header is read as raw bytes and decoded as UTF-8, as for API
+    keys (`app/api/auth.py`), and the token is compared as SHA-256 digests with `hmac.compare_digest`. Anything
+    else gets a 401 with `WWW-Authenticate: Bearer` and a body in ADR-0008's shape, with the same `type` as an
+    API-key failure but its own `code`, `invalid_metrics_token`, and the message "Missing or invalid metrics
+    token.", so a scraper is not told to send an API key. An API key never opens `/metrics`, and the
+    metrics token never opens the chat route. The route is left out of the OpenAPI document, which is the
+    client contract, so the snapshot does not change; `docs/setup.md` documents the route.
+  - **FastAPI's telemetry.** `create_app()` turns FastAPI's native tracing, metrics and logs off explicitly,
+    so an OpenTelemetry SDK installed later never starts a second, unreviewed set of spans and metrics.
+  - **Processes.** Metrics and the log are per process. ADR-0017 runs one uvicorn process per container, so
+    each process is one scrape target.
+- **Consequences:**
+  - No new dependency. The renderer is code the project owns. A mistake in it shows as a failed scrape, so
+    its tests compare the exact text and check each line against the format rules above. A later move to
+    `prometheus_client` would keep every metric name.
+  - ADR-0012's and ADR-0013's "nothing records" gaps close, through `tollgate_settle_capped_total` and the
+    `reply_too_large` outcome. An embedder outage shows as `embedder_failed`.
+  - Series counts, with P route-table providers: each histogram has 18 series per label set (16 buckets, `_sum`
+    and `_count`), so the request duration has 72 with four paths and the attempt duration 18 P. Attempts have
+    8 P, chat completions 4 P, lookups 4, and requests one per path and status seen, at most the four paths
+    times the statuses the code can answer. Several
+    exceed the guideline of about 10 cited above. That is accepted, because each set is fixed by the code or the
+    route table and stays in the hundreds for a small table. `docs/setup.md` gives the formula.
+  - Tracebacks never reach the JSON log. To debug an exception, an operator runs uvicorn without
+    `--log-config`, which uses uvicorn's own text format with tracebacks.
+  - The log holds token counts and provider names, never request content. One request cannot be traced across
+    systems, because there is no request id; a request-id header would change the contract and is a backlog
+    item.
+  - The record is written after the response is sent, so a crash between the two loses it.
+  - The middleware sees every request, including a 401 before the body is read. A 400 or a 401 has only the
+    base fields.
+  - `MonotonicClock`, `Attempt`, `ReplyTooLargeError` and the `reason` of `Skip` join ARCHITECTURE section 3.
+    ADR-0013's status is "Accepted - amended by ADR-0016", and ADR-0014's "Accepted - amended by ADR-0016".
+  - Delivered by T-401 to T-404. Accepted by the owner as written on 2026-11-23.
+
+---
+
+## ADR-0017
+
+**Container image, Docker Compose, and the deployment target: one host (amends ADR-0006)** · Accepted ·
+2026-11-23
+
+- **Context:** The deployment target is decided in a Phase 4 ADR (TASKS.md, "Requirements that carry into the
+  task cards"). Today the gateway runs only as `uvicorn --factory app.main:create_app` on a development
+  machine. Checked on 2026-11-23 against Docker Hub, docker-library/python, docs.docker.com, the uvicorn source
+  and documentation, actions/runner-images, the providers' pricing pages and the GitHub documentation:
+  - `python:3.13-slim` is Python 3.13.18 on Debian trixie. The image sets no `USER`, and the tag is rebuilt in
+    place, so only a digest pins it. Docker's best-practices page recommends multi-stage builds, a
+    `.dockerignore`, a digest pin, a non-root `USER` and an exec-form `CMD`. A shell-form `CMD` runs under
+    `/bin/sh -c` and does not pass SIGTERM on.
+  - uvicorn handles SIGINT and SIGTERM. It stops accepting connections, waits for open ones (bounded by
+    `--timeout-graceful-shutdown`), and then runs the lifespan shutdown, which closes the app's clients (T-203).
+    Its host defaults to 127.0.0.1. Its Docker page recommends one worker per container, scaled by containers.
+  - Compose has `depends_on` with `condition: service_healthy`, `healthcheck`, `profiles` (a service in a
+    profile starts only when that profile is active), read-only mounts and `docker compose up --wait`.
+    `stop_grace_period` defaults to 10 seconds.
+  - GitHub's `ubuntu-latest` (ubuntu-24.04, image 20261116.376.1) has Docker 28.0.4, Compose 2.38.2 and
+    Buildx 0.39.0.
+  - `redis:7.4.12` is still the current 7.4 tag, and CI uses it (ADR-0006). Redis 7.4 is licensed RSALv2 or
+    SSPLv1, and Redis 8 RSALv2, SSPLv1 or AGPLv3. The repository names the image and never redistributes it.
+    ADR-0006 did not record the licence.
+  - `ollama/ollama:0.40.17` is about 3.4 GB compressed for amd64.
+  - hadolint v2.15.1 lints Dockerfiles. It is GPL-3.0 and runs as a container in CI; it is never shipped.
+  - Hosted options, from the pricing pages read on 2026-11-23 (these change often). Fly.io gives $1 of credit
+    without a card. Render's free web service sleeps after 15 minutes without traffic, and its free Key Value
+    is in memory only. Railway's free plan gives $1 a month and sleeps idle services. Koyeb requires a card and
+    scales to zero. Cloud Run and Azure Container Apps have free allowances, but both need a billing account
+    with a card. A sleeping or restarted instance loses the in-memory limiter and the cache.
+  - The GitHub Container Registry is free for public images. Publishing needs `packages: write` in the
+    workflow.
+- **Options:**
+  - Target: (a) one host running Docker Compose: the gateway and Redis, with Ollama optional; (b) a hosted free
+    tier; (c) Kubernetes manifests or a Helm chart.
+  - Checking the image in CI: (d) a separate job that lints, builds, starts the stack and sends smoke requests;
+    (e) a build only; (f) no check.
+  - Publishing the image: (g) to the GitHub Container Registry now; (h) decided with the demo in Phase 5.
+- **Decision (proposed):** (a), (d) and (h).
+  - **Image.** A multi-stage `Dockerfile` on `python:3.13-slim@sha256:<digest>`: the index digest resolved when
+    T-405 is built, with the tag in a comment. The builder stage creates a virtual environment and installs
+    `requirements.txt` with `--only-binary=:all:` and `--no-cache-dir`. The runtime stage copies the virtual
+    environment, `app/` and `deploy/logging.json`, and nothing else. It runs as a non-root user with a fixed
+    uid, exposes port 8000, and starts with the exec-form `CMD ["uvicorn", "--factory", "app.main:create_app",
+    "--host", "0.0.0.0", "--port", "8000", "--log-config", "deploy/logging.json", "--no-access-log"]`, one
+    worker. `.dockerignore` excludes everything and lists back only the paths the build copies, so `.env*`,
+    `.venv`, `.git`, local notes and editor files never enter the build context.
+  - **Compose** (`compose.yaml`):
+    - `gateway` is built from the `Dockerfile`, uses the Redis limiter, and waits for Redis to be healthy. Its
+      own healthcheck calls `/health` with the image's Python.
+    - `redis` runs `redis:7.4.12`, the tag CI uses, with the healthcheck `redis-cli ping` and no published port.
+    - The route table is mounted read-only from `deploy/routes.compose.json` at `/config/routes.json`, outside
+      the app directory. It routes only to the mock provider, so the stack runs with no provider key and no
+      outside network.
+    - The API port is published on `127.0.0.1:8000` only.
+    - `TOLLGATE_API_KEYS` and `TOLLGATE_METRICS_TOKEN` come from the caller's environment or an uncommitted
+      `.env`, required through `${VAR:?...}`, and are never written in the file.
+    - An `ollama` service in the `ollama` profile, with a named volume for models, is off by default.
+  - **CI.** A new job, `container`, in `ci.yml`: hadolint on the `Dockerfile`, `docker compose config
+    --quiet`, `docker compose build`, `docker compose up --wait`, `scripts/smoke_container.py` (standard library
+    only) against `127.0.0.1:8000`, and `docker compose down`. It pulls the base images from Docker Hub and the
+    wheels from PyPI, as the `lint and test` job already does. Its key and token are random values generated in
+    the job at run time and written to `$GITHUB_ENV`, never to a file in the repository. Whether `container`
+    becomes a required check is the owner's decision, made in the ruleset.
+  - **Network exception (amends ADR-0006).** ADR-0006 made the localhost Redis service container the one
+    exception to "no network in tests". This adds a second, in CI only: the `container` job's traffic on
+    localhost to its own Compose stack (the smoke requests, and the checks of Redis and the logs through
+    `docker compose`). pytest uses no network apart from ADR-0006's `redis_server` tests in CI.
+  - **Deployment target.** One host running this Compose stack, with one gateway process per container. More
+    gateway containers are supported only with `TOLLGATE_LIMITER_BACKEND=redis`: with the memory backend, N
+    processes would allow N times the capacity. The cache and the metrics are per process in every case. The
+    gateway does not serve TLS. On a host reachable from outside, a reverse proxy in front of it terminates
+    TLS, and that proxy is outside this repository. There is no hosted deployment in Phase 4.
+  - **Publishing** an image to the GitHub Container Registry is decided with the Phase 5 demo.
+- **Consequences:**
+  - The stack runs wherever Docker runs, with no paid service. On the owner's Windows machine it needs Docker
+    Desktop; T-409 records whether it was run there.
+  - A digest pin means base-image fixes arrive only when the pin is updated by hand, as for the actions' SHAs.
+    The Dependabot backlog item now covers Docker as well.
+  - CI time grows by one image build. The job blocks no merge unless the owner adds it to the ruleset.
+  - Redis's licence is recorded: the stack runs Redis unmodified from its official image, under RSALv2 or
+    SSPLv1, and the repository's MIT code is unaffected.
+  - Without a hosted instance there is no public demo URL; Phase 5 decides.
+  - ADR-0006's status is "Accepted - amended by ADR-0017".
+  - Delivered by T-405 and T-409. Accepted by the owner as written on 2026-11-23.
+
+---
+
+## ADR-0018
+
+**Load benchmarks: a fixed arrival rate measured from the due time, a fake upstream, recorded runs only** ·
+Accepted · 2026-11-23
+
+- **Context:** The README has no performance figure, and ADR-0005 requires every number to come from a recorded
+  run with its settings. Phase 4 measures the latency the gateway adds and its throughput with each limiter,
+  the cache scan's cost (ADR-0015), and the embedding call's latency (ADR-0014). Checked on 2026-11-23 against
+  the sources named below:
+  - A closed loop (fixed concurrency) waits for each answer before sending the next request, so a slow answer
+    delays the requests behind it and is under-counted. This is coordinated omission (Gil Tene,
+    "Coordinated Omission", mechanical-sympathy list, 2013-08-04; the wrk2 README). An open model sends at a
+    fixed rate and measures each request from when it should have been sent: wrk2's `-R`, oha's
+    `--latency-correction`, and k6's arrival-rate executors, which count `dropped_iterations`
+    (grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/).
+  - Envoy's benchmarking guide says to prefer an open loop and to measure latency below the knee, never at
+    maximum load (envoyproxy.io, "How do I benchmark Envoy?"). Kong's uses a request-termination baseline and an
+    upstream with no plugins, repeats runs and discards the first one or two
+    (developer.konghq.com/gateway/performance/establish-a-benchmark/). LiteLLM's uses a mock upstream that
+    waits 200 ms, a 60-second warm-up and fixed request rates (docs.litellm.ai/docs/benchmarks).
+  - Tools: k6 v2.4.0 (AGPL-3.0, a Go binary); Locust 2.47.0 (MIT, but closed loop: its wait time "can only
+    constrain the throughput", and it pulls in gevent, pyzmq, flask and more); vegeta (MIT); oha (MIT, with a
+    Windows binary); wrk2 (Apache-2.0, no Windows build, no commit since 2019).
+  - `statistics.quantiles(..., method="inclusive")` interpolates between order statistics. A sample p99 rests
+    on about n/100 observations. The `timeit` documentation advises taking the minimum of the repeats and then
+    looking at the whole vector. httpx 0.28.1's default pool allows 100 connections and keeps 20 alive.
+    asyncio's platform notes say the event loop's timer is coarser on Windows than on Linux.
+- **Options:**
+  - Load generator: (a) a script in the repository on the standard library and httpx; (b) k6, oha or vegeta,
+    installed by the owner; (c) Locust.
+  - Load model: (d) an open loop at a fixed rate; (e) a closed loop at a fixed concurrency.
+  - Upstream: (f) the mock provider only; (g) also a fake OpenAI-compatible server with a fixed delay, reached
+    through the real `openai` adapter.
+- **Decision (proposed):** (a), (d) and (g).
+  - **Fake upstream.** `scripts/fake_upstream.py` is a Starlette app served by uvicorn. It answers `POST
+    /v1/chat/completions` with a fixed OpenAI-shaped body and usage after a fixed delay (50 ms by default,
+    chosen, not measured), and nothing else. It exists for benchmarks and no setting selects it in the gateway.
+  - **Generator.** In `scripts/bench_load.py`, request i is due at the start plus i divided by the rate, and
+    each request is sent as its own task. Times come from ADR-0016's monotonic clock (`time.perf_counter`;
+    `time.get_clock_info("perf_counter")` on the owner's machine on 2026-11-23 reported QueryPerformanceCounter
+    with a resolution of 1e-07 seconds). Latency is measured from the due
+    time to the end of the response. The lag is measured from the due time to the moment the task hands the
+    request to httpx. By default the client has no connection cap, so no request waits in httpx's pool, and the
+    report records the peak number of requests in flight. When a cap is set, the time spent waiting for a
+    connection counts as latency, and the report names the cap. Warm-up requests are sent and discarded.
+  - **Report.** A run reports the request count, errors by status and transport errors, the achieved rate,
+    the latency p50, p95, p99 and maximum (inclusive quantiles, with the method named), the lag p50, p99 and
+    maximum, and the generator's CPU time. It also records its settings:
+    - the scenario (`A`, `B` or `C`), the rate, the duration, the warm-up and the connection cap
+    - what the gateway ran with, as given on the command line: the limiter backend, its tokens per minute and
+      capacity, the route file's SHA-256, the fake upstream's delay, and whether the server ran under bare
+      uvicorn or Compose
+    - the request body's size and SHA-256 (the script sends one fixed body, with `max_tokens` fixed)
+    - the git commit, the Python version, the OS, the CPU count, and whether the generator shares a machine
+      with the server
+    - The API key is read from an environment variable named on the command line and never written to the
+      report. Output is a JSON report and a Markdown table, as for `scripts/eval_cache.py`.
+  - **Validity.** A run is valid only if every response was a 200, no transport error occurred, and the lag
+    p99 is at most 10% of the latency p99, both computed from the raw samples whatever their number. The 10% is
+    chosen, not measured. A p99 is published only from at least 10,000 measured requests; with fewer, the
+    report says "too few samples" in its place, and validity is still computed. For the published scenario
+    runs, the measured duration is at least 60 seconds and long enough that the rate times the duration
+    reaches 10,000. The limiter's settings must leave room for twice the reserved tokens the rate needs per
+    minute, so that no request can be refused, and the report records them.
+  - **Scenarios** (the owner's runs, T-409), all with the cache off:
+    - A: the fake upstream, called directly
+    - B: the gateway, through the `openai` adapter, to the fake upstream
+    - C: the gateway with the mock provider
+    - B and C each run with the memory limiter and with the Redis limiter.
+    - B and C read committed route files under `deploy/bench/`, so their route tables are the same on every
+      machine.
+    - Each scenario runs at a fixed rate below the knee, found by a short ramp that is recorded with the runs.
+      Each run is repeated 3 times, with at least 60 seconds measured after 10 seconds of warm-up.
+    - The latency the gateway adds is reported as B minus A at each percentile, per repeat, never as one
+      blended figure.
+  - **Cache scan.** `scripts/bench_cache.py` fills one partition of an `InMemorySemanticCache` with N seeded
+    unit vectors of D dimensions (N of 1,000, 10,000 and 100,000; D of 384 and 1,024). It times `lookup` with a
+    fake embedder and a threshold no entry reaches, so every entry is scanned. It repeats with `timeit` and
+    reports the minimum and median time per lookup.
+  - **Embedding latency.** 100 sequential calls through `OllamaEmbedder` after one discarded call, recording
+    the model and the Ollama version.
+  - **CI.** The scripts' logic is unit-tested with a fake clock and `httpx.MockTransport` or
+    `httpx.ASGITransport`. One tiny in-process run checks the report's shape. CI publishes no figure, because
+    shared runners are noisy.
+  - **Publishing.** Every figure goes into `docs/benchmarks.md` with its run's settings, and the JSON reports
+    are committed under `docs/benchmarks/`. The README quotes figures only from there.
+- **Consequences:**
+  - No new dependency, and no AGPL tool. The generator is the project's own code, so it is tested like the
+    gateway. The lag check catches a saturated generator but cannot prove there is none.
+  - A generator and a gateway on one machine compete for the CPU. Every report says so, and figures from such a
+    run describe that machine, not a production deployment.
+  - One Python process can sustain only a limited rate. A run that fails the lag check is reported as invalid,
+    not tuned until it passes. On Windows the event loop's timer is coarser, so runs there may fail the lag
+    check more often than on Linux; the owner may then run under Linux, WSL2 or the Compose stack, and the
+    report names the platform.
+  - The 10,000-request floor sets the shortest run for a published p99: at a rate of 50 requests per second it
+    takes 200 seconds of measurement.
+  - The fake upstream's delay is chosen, not measured from a real provider. B minus A reflects the gateway's
+    own work only as far as that work does not depend on the upstream's timing.
+  - 100,000 entries of 1,024 dimensions hold about 800 MB of vectors (100,000 x 1,024 x 8 bytes). A machine
+    without the memory skips that combination, and the report says so.
+  - The 10% lag threshold is a chosen operating margin, not measured from data.
+  - Delivered by T-406 to T-409. Accepted by the owner on 2026-11-23, with the line on the lag threshold
+    added.
 
 ---
 
