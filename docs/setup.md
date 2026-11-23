@@ -289,7 +289,7 @@ hit: normalised vectors of identical text can score just under 1 (`0.99999999999
 **What a hit costs.** The reservation is made first, as for any request, so a request that does not fit the bucket
 gets a 429 even when its answer is cached. A hit then settles at 0 tokens and refunds the whole reservation. A
 hit's `id` and `created` are new, `usage` describes the answer as it was first produced, and `x-tollgate-provider`
-names the provider that produced it, not one that served this request. Every eligible request, hit or miss, makes
+names the provider that produced it, not one that served this request. Every eligible request that passes the rate limit, hit or miss, makes
 one embedding call to Ollama before any provider call, so a slow or stopped Ollama adds latency (up to the
 10-second read timeout) or turns the request into a `skip`.
 
@@ -299,7 +299,7 @@ one embedding call to Ollama before any provider call, so a slow or stopped Olla
   messages. Only the last `user` message is compared by meaning.
 - Only a 200 with one choice, finish reason `stop` and a JSON body of at most 65,536 bytes is stored.
 - An entry lives `TOLLGATE_CACHE_TTL_SECONDS` (default 3600) from when it was stored; a hit does not extend it. At
-  most `TOLLGATE_CACHE_MAX_ENTRIES` (default 1000) are kept, and the least recently used goes first. Both defaults
+  most `TOLLGATE_CACHE_MAX_ENTRIES` (default 1000) are kept; when it is full, an expired entry goes first, then the least recently used. Both defaults
   are chosen, not measured.
 - Each process has its own cache, held in memory. Several workers or instances do not share entries, and a restart
   empties it.
