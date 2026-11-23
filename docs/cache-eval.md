@@ -163,5 +163,90 @@ What this shows, about the hashing embedder only:
 
 ## Ollama runs
 
-Not yet recorded. The recommended threshold for a model comes from a run with `--embedder ollama` against that
-model, recorded here with its settings (T-307).
+### all-minilm
+
+Recorded on 2026-11-23 on Windows 11 with Python 3.13.2 and Ollama 0.40.17, model `all-minilm:latest` (ID
+`1b226e2802db`, 45 MB), with:
+
+```
+ollama pull all-minilm
+.venv/Scripts/python scripts/eval_cache.py --embedder ollama --model all-minilm
+```
+
+The first attempt failed with `embedding failed: timeout` on the first pair (the model was loading); the second,
+with the model loaded, is the one below. The output, unedited apart from its heading level:
+
+#### Cache eval report
+
+- Date (UTC): 2026-11-23
+- Embedder: ollama:all-minilm
+- Dataset SHA-256 (LF line endings): 73aa98d68f99b48578e9b1f0ca6f30a609ceaf00388ee6ffcc32825472bb9e1f
+- Pairs: 40 same, 40 different
+- Ollama version: 0.40.17
+
+| Threshold | Same hits | Wrong hits | unrelated_topic | negation | changed_number | swapped_order | changed_entity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.50 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.51 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.52 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.53 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.54 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.55 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.56 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.57 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.58 | 40/40 (100.0%) | 31/40 (77.5%) | 0 | 8 | 8 | 8 | 7 |
+| 0.59 | 40/40 (100.0%) | 30/40 (75.0%) | 0 | 8 | 8 | 8 | 6 |
+| 0.60 | 40/40 (100.0%) | 29/40 (72.5%) | 0 | 8 | 8 | 8 | 5 |
+| 0.61 | 40/40 (100.0%) | 29/40 (72.5%) | 0 | 8 | 8 | 8 | 5 |
+| 0.62 | 40/40 (100.0%) | 28/40 (70.0%) | 0 | 8 | 8 | 8 | 4 |
+| 0.63 | 40/40 (100.0%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.64 | 40/40 (100.0%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.65 | 40/40 (100.0%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.66 | 40/40 (100.0%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.67 | 40/40 (100.0%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.68 | 39/40 (97.5%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.69 | 39/40 (97.5%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.70 | 38/40 (95.0%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.71 | 37/40 (92.5%) | 27/40 (67.5%) | 0 | 8 | 8 | 8 | 3 |
+| 0.72 | 37/40 (92.5%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.73 | 37/40 (92.5%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.74 | 37/40 (92.5%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.75 | 37/40 (92.5%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.76 | 35/40 (87.5%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.77 | 34/40 (85.0%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.78 | 34/40 (85.0%) | 25/40 (62.5%) | 0 | 8 | 8 | 8 | 1 |
+| 0.79 | 33/40 (82.5%) | 24/40 (60.0%) | 0 | 8 | 8 | 7 | 1 |
+| 0.80 | 33/40 (82.5%) | 22/40 (55.0%) | 0 | 8 | 6 | 7 | 1 |
+| 0.81 | 33/40 (82.5%) | 20/40 (50.0%) | 0 | 8 | 5 | 7 | 0 |
+| 0.82 | 33/40 (82.5%) | 20/40 (50.0%) | 0 | 8 | 5 | 7 | 0 |
+| 0.83 | 31/40 (77.5%) | 20/40 (50.0%) | 0 | 8 | 5 | 7 | 0 |
+| 0.84 | 31/40 (77.5%) | 20/40 (50.0%) | 0 | 8 | 5 | 7 | 0 |
+| 0.85 | 29/40 (72.5%) | 20/40 (50.0%) | 0 | 8 | 5 | 7 | 0 |
+| 0.86 | 28/40 (70.0%) | 17/40 (42.5%) | 0 | 8 | 3 | 6 | 0 |
+| 0.87 | 28/40 (70.0%) | 17/40 (42.5%) | 0 | 8 | 3 | 6 | 0 |
+| 0.88 | 25/40 (62.5%) | 17/40 (42.5%) | 0 | 8 | 3 | 6 | 0 |
+| 0.89 | 24/40 (60.0%) | 16/40 (40.0%) | 0 | 7 | 3 | 6 | 0 |
+| 0.90 | 21/40 (52.5%) | 16/40 (40.0%) | 0 | 7 | 3 | 6 | 0 |
+| 0.91 | 21/40 (52.5%) | 16/40 (40.0%) | 0 | 7 | 3 | 6 | 0 |
+| 0.92 | 17/40 (42.5%) | 14/40 (35.0%) | 0 | 7 | 2 | 5 | 0 |
+| 0.93 | 15/40 (37.5%) | 12/40 (30.0%) | 0 | 6 | 1 | 5 | 0 |
+| 0.94 | 11/40 (27.5%) | 12/40 (30.0%) | 0 | 6 | 1 | 5 | 0 |
+| 0.95 | 11/40 (27.5%) | 11/40 (27.5%) | 0 | 5 | 1 | 5 | 0 |
+| 0.96 | 9/40 (22.5%) | 11/40 (27.5%) | 0 | 5 | 1 | 5 | 0 |
+| 0.97 | 6/40 (15.0%) | 7/40 (17.5%) | 0 | 2 | 0 | 5 | 0 |
+| 0.98 | 4/40 (10.0%) | 4/40 (10.0%) | 0 | 0 | 0 | 4 | 0 |
+| 0.99 | 2/40 (5.0%) | 4/40 (10.0%) | 0 | 0 | 0 | 4 | 0 |
+| 1.00 | 0/40 (0.0%) | 0/40 (0.0%) | 0 | 0 | 0 | 0 | 0 |
+
+Recommended threshold: none. No threshold below 1.00 has zero wrong hits on this dataset, so do not use the cache with this embedder.
+
+What this shows, about `all-minilm` on this dataset only:
+
+- No threshold below 1.00 has zero wrong hits, so the run recommends none. At 0.99, 2 of 40 `same` pairs hit and
+  4 of 40 `different` pairs hit (all `swapped_order`); at 0.98 the counts are 4 and 4.
+- Pairs that change the meaning inside one topic are embedded almost like the original: all 8 `negation` pairs
+  hit through 0.88, and all 8 `changed_number` and 8 `swapped_order` pairs hit through 0.78. `unrelated_topic`
+  never hits at any threshold from 0.50, so the model separates topics but not meaning changes inside one topic.
+- From 0.94 up, wrong hits are at least as many as same hits, so raising the threshold removes correct hits as
+  fast as wrong ones. This model is not usable for this cache on this dataset.
+- Only one model has been run. `bge-m3` is optional on the card and was not run; it has no recorded result.
