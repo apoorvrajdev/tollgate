@@ -227,7 +227,8 @@ OUTCOME_CASES: list[tuple[str, Exception, AttemptOutcome]] = [
     ("connection", ProviderError("connection"), "connection"),
     ("timeout", ProviderError("timeout"), "timeout"),
     ("rate_limited", ProviderError("rate_limited", 429), "rate_limited"),
-    ("upstream_500", ProviderError("upstream_status", 503), "upstream_status"),
+    ("upstream_500", ProviderError("upstream_status", 500), "upstream_status"),
+    ("upstream_503", ProviderError("upstream_status", 503), "upstream_status"),
     ("upstream_400", ProviderError("upstream_status", 400), "upstream_status"),
     ("bad_response", ProviderError("bad_response", 200), "bad_response"),
     ("reply_too_large", ReplyTooLargeError(200), "reply_too_large"),
@@ -261,7 +262,7 @@ def test_each_attempt_is_timed_from_its_own_start() -> None:
     clock = FakeMonotonicClock()
     a = ScriptedProvider("a", error=ProviderError("timeout"), on_call=advancing(clock, 0.25))
     b = ScriptedProvider(
-        "b", error=ProviderError("rate_limited", 429), on_call=advancing(clock, 1.0)
+        "b", error=ProviderError("upstream_status", 503), on_call=advancing(clock, 1.0)
     )
     c = ScriptedProvider("c", on_call=advancing(clock, 0.5))
     outcome = run(route_of("a", "b", "c"), a, b, c, monotonic_clock=clock)
@@ -269,7 +270,7 @@ def test_each_attempt_is_timed_from_its_own_start() -> None:
     assert outcome.fallbacks == 2
     assert outcome.attempts == (
         Attempt("a", "timeout", 0.25),
-        Attempt("b", "rate_limited", 1.0),
+        Attempt("b", "upstream_status", 1.0),
         Attempt("c", "ok", 0.5),
     )
 
@@ -316,9 +317,8 @@ def test_a_call_that_takes_no_time_has_a_zero_duration() -> None:
     assert result.attempts == (Attempt("a", "timeout", 0.0),)
 
 
-def test_time_between_calls_is_not_part_of_any_attempt() -> None:
+def test_attempt_durations_add_up_to_the_time_the_clock_moved() -> None:
     clock = FakeMonotonicClock()
-    # Each provider advances the clock before it fails, and a retryable failure moves straight on.
     a = ScriptedProvider("a", error=ProviderError("timeout"), on_call=advancing(clock, 0.25))
     b = ScriptedProvider("b", on_call=advancing(clock, 0.5))
     outcome = run(route_of("a", "b"), a, b, monotonic_clock=clock)
@@ -328,9 +328,12 @@ def test_time_between_calls_is_not_part_of_any_attempt() -> None:
     )
 
 
-def test_an_attempt_is_immutable_and_a_reply_too_large_is_not_a_plain_bad_response() -> None:
+def test_an_attempt_is_immutable() -> None:
     attempt = Attempt("a", "ok", 0.25)
     with pytest.raises(AttributeError):
         attempt.outcome = "error"  # type: ignore[misc]
+
+
+def test_a_plain_bad_response_is_not_recorded_as_reply_too_large() -> None:
     plain = failed(run(route_of("a"), ScriptedProvider("a", error=ProviderError("bad_response"))))
     assert plain.attempts[0].outcome == "bad_response"

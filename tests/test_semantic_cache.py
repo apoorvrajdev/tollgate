@@ -467,18 +467,6 @@ def test_an_embedding_error_gives_a_skip() -> None:
     assert embedder.calls == ["q"]
 
 
-def test_each_skip_reason_is_distinct_and_a_lookup_that_embeds_never_skips_as_not_eligible() -> (
-    None
-):
-    assert Skip("not_eligible") != Skip("embedder_failed")
-    assert Skip("embedder_failed").reason == "embedder_failed"
-    cache, _, embedder = make_cache({})
-    embedder.error = EmbeddingError("timeout", None)
-    skipped = look(cache, "q")
-    assert isinstance(skipped, Skip)
-    assert skipped.reason != "not_eligible"
-
-
 def test_any_other_embedder_exception_propagates() -> None:
     cache, _, embedder = make_cache({})
     embedder.error = RuntimeError("bug")

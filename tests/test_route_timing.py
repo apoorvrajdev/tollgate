@@ -92,6 +92,17 @@ def test_an_attempts_duration_comes_from_the_monotonic_clock_not_the_wall_clock(
     assert outcome.attempts == (Attempt("mock", "ok", 0.25),)
 
 
+def test_a_call_that_moves_only_the_wall_clock_has_a_zero_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spy = spied(monkeypatch)
+    wall, monotonic = FakeClock(start_seconds=1000.0), FakeMonotonicClock(start_seconds=50.0)
+    provider = ScriptedProvider("mock", on_call=lambda: wall.advance(8.0))
+    application = create_app(make_settings(), wall, provider=provider, monotonic_clock=monotonic)
+    assert TestClient(application).post(URL, json=BODY, headers=AUTH_HEADERS).status_code == 200
+    assert spy.outcomes[0].attempts == (Attempt("mock", "ok", 0.0),)
+
+
 def test_a_failed_route_reports_its_attempts_and_the_chat_route_still_answers_502(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
