@@ -33,3 +33,11 @@ class ProviderError(Exception):
         if self.kind == "upstream_status":
             return self.status_code is not None and self.status_code >= FIRST_RETRYABLE_STATUS
         return self.kind in _ALWAYS_RETRYABLE
+
+
+class ReplyTooLargeError(ProviderError):
+    """A 2xx reply passed the size cap. It is a `bad_response` for every existing caller; the
+    router tells it apart to record the attempt (ADR-0016)."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__("bad_response", status_code)
