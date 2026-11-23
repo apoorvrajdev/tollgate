@@ -45,7 +45,7 @@ from app.api.errors import INVALID_REQUEST_ERROR, ErrorBody, ErrorResponse
 from app.api.limit_headers import LIMIT_HEADERS_OPENAPI, RETRY_AFTER_OPENAPI, limit_headers
 from app.api.models import ChatRequest, ChatResponse
 from app.cache.semantic import Hit, Miss, SemanticCache
-from app.clock import Clock
+from app.clock import Clock, MonotonicClock
 from app.limits.charge import charged_tokens
 from app.limits.estimate import TokenEstimator, reserved_tokens
 from app.limits.limiter import Decision, RateLimiter
@@ -131,6 +131,11 @@ def get_clock(request: Request) -> Clock:
     return clock
 
 
+def get_monotonic_clock(request: Request) -> MonotonicClock:
+    monotonic_clock: MonotonicClock = request.app.state.monotonic_clock
+    return monotonic_clock
+
+
 def rate_limit_message(decision: Decision, requested_tokens: int) -> str:
     """The 429 message: the limit, the requested amount and the wait (ADR-0008)."""
     if decision.retry_after_seconds is None:
@@ -204,6 +209,7 @@ async def create_chat_completion(
     cache: Annotated[SemanticCache | None, Depends(get_cache)],
     id_source: Annotated[IdSource, Depends(get_id_source)],
     clock: Annotated[Clock, Depends(get_clock)],
+    monotonic_clock: Annotated[MonotonicClock, Depends(get_monotonic_clock)],
 ) -> ChatResponse | JSONResponse:
     try:
         route = route_selector.select(body)
@@ -243,7 +249,7 @@ async def create_chat_completion(
             store_answer = partial(cache.store, looked_up.ticket)
     # run_route guards only the provider calls, so a limiter error is never refunded, and the
     # exception text is never sent, because it can hold provider internals.
-    outcome = await run_route(route, providers, body)
+    outcome = await run_route(route, providers, body, monotonic_clock=monotonic_clock)
     if isinstance(outcome, RouteFailed):
         actual_tokens = requested_tokens if outcome.charged else 0
         await limiter.settle(key, requested_tokens, actual_tokens)

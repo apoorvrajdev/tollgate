@@ -19,7 +19,7 @@ from typing import Any, NamedTuple
 
 import httpx
 
-from app.providers.errors import ProviderError
+from app.providers.errors import ProviderError, ReplyTooLargeError
 
 RATE_LIMITED_STATUS = 429
 
@@ -32,15 +32,15 @@ class JsonReply(NamedTuple):
 async def read_capped(response: httpx.Response, max_response_bytes: int) -> bytes:
     """The decoded body; a body of exactly `max_response_bytes` is returned.
 
-    Raises ProviderError("bad_response", response.status_code) as soon as the total passes the
-    limit. The error holds only the kind and the status, never any of the body.
+    Raises ReplyTooLargeError (a bad_response with response.status_code) as soon as the total
+    passes the limit. The error holds only the kind and the status, never any of the body.
     """
     chunks: list[bytes] = []
     total_bytes = 0
     async for chunk in response.aiter_bytes():
         total_bytes += len(chunk)
         if total_bytes > max_response_bytes:
-            raise ProviderError("bad_response", response.status_code)
+            raise ReplyTooLargeError(response.status_code)
         chunks.append(chunk)
     return b"".join(chunks)
 

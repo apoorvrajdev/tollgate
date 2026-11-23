@@ -21,7 +21,7 @@ import math
 from array import array
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.api.models import ChatRequest, ChatResponse
 from app.cache.embedder import Embedder, EmbeddingError
@@ -52,7 +52,10 @@ class Miss:
 
 @dataclass(frozen=True, slots=True)
 class Skip:
-    """Not looked up: the request is not eligible or the embedder failed."""
+    """Not looked up. `reason` is `not_eligible` (the last message is not the user's, so nothing
+    was embedded) or `embedder_failed` (the embedder raised an `EmbeddingError`; ADR-0016)."""
+
+    reason: Literal["not_eligible", "embedder_failed"]
 
 
 type LookupResult = Hit | Miss | Skip
@@ -121,12 +124,12 @@ class InMemorySemanticCache:
     async def lookup(self, caller_id: str, request: ChatRequest) -> LookupResult:
         last = request.messages[-1]
         if last.role != "user":
-            return Skip()
+            return Skip("not_eligible")
         key = partition_key(caller_id, request, self._embedder.identity)
         try:
             vector = await self._embedder.embed(last.content)
         except EmbeddingError:
-            return Skip()  # fail open; any other exception is a bug and propagates
+            return Skip("embedder_failed")  # fail open; any other exception is a bug and propagates
         now_seconds = self._clock.now_seconds()
         best: _Entry | None = None
         best_similarity = 0.0

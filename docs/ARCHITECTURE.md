@@ -53,11 +53,16 @@ flowchart TB
 Names are final once an ADR or task card fixes them. `Clock`, `Provider`, `TokenEstimator`,
 `reserved_tokens`, `Decision` and `RateLimiter` are final (tasks T-101 to T-105); `ProviderError`,
 `Route` and `Router` are final (T-201, T-202); `Embedder`, `EmbeddingError`, `SemanticCache`, `Hit`, `Miss`
-and `Skip` are final (T-301 to T-306, ADR-0014, ADR-0015).
+and `Skip` are final (T-301 to T-306, ADR-0014, ADR-0015). `MonotonicClock`, `ReplyTooLargeError`,
+`Attempt`, `AttemptOutcome` and `Skip.reason` are final (T-401, ADR-0016).
 
 ```python
 class Clock(Protocol):
     def now_seconds(self) -> float: ...        # injected everywhere; tests use a fake
+
+class MonotonicClock(Protocol):
+    def monotonic_seconds(self) -> float: ...  # differences only, never goes back; the system one
+                                               # reads time.perf_counter(); times each provider call
 
 class Provider(Protocol):
     async def complete(self, request: ChatRequest) -> ChatResponse: ...
@@ -88,6 +93,21 @@ class ProviderError(Exception):
     def retryable(self) -> bool: ...           # connection, timeout, rate_limited, and
                                                # upstream_status from 500 up
 
+class ReplyTooLargeError(ProviderError):       # a 2xx reply passed the size cap; always a
+    def __init__(self, status_code: int): ...  # bad_response, so existing callers are unchanged
+
+type AttemptOutcome = Literal["ok", "connection", "timeout", "rate_limited", "upstream_status",
+                              "bad_response", "reply_too_large", "error"]  # error: not a ProviderError
+
+@dataclass(frozen=True, slots=True)
+class Attempt:                                 # one provider call
+    provider_name: str
+    outcome: AttemptOutcome
+    duration_seconds: float                    # on the MonotonicClock
+
+# Served(completion, provider_name, fallbacks, attempts) and RouteFailed(charged, attempts) hold every
+# Attempt in call order; run_route(route, providers, request, *, monotonic_clock) returns one of them.
+
 type Route = tuple[TargetConfig, ...]          # ordered targets: a provider name and an
                                                # optional upstream model
 
@@ -115,7 +135,8 @@ class Miss:
     ticket: Ticket                             # the partition key and the vector, for store()
 
 @dataclass(frozen=True, slots=True)
-class Skip: ...                                # not eligible, or the embedder failed
+class Skip:
+    reason: Literal["not_eligible", "embedder_failed"]
 
 class SemanticCache(Protocol):
     async def lookup(self, caller_id: str, request: ChatRequest) -> Hit | Miss | Skip: ...
@@ -192,8 +213,9 @@ provider's default base URL when `base_url` is absent or empty, their `max_respo
 cache on (`TOLLGATE_CACHE_EMBEDDER`), it builds an `OllamaEmbedder` on its own client, or takes the injected
 `embedder=`, kept on `app.state.embedder`, and an `InMemorySemanticCache` on it and the clock, kept on
 `app.state.cache`; both are `None` with the cache off. The id source the providers share is kept on
-`app.state.id_source`. The chat route reads the registry, the router, the limiter, the cache, the id source
-and the clock from `app.state` on every request. It selects the route first, answering a model that no route
+`app.state.id_source`. The chat route reads the registry, the router, the limiter, the cache, the id source,
+the clock and the monotonic clock (`monotonic_clock=`, else a `SystemMonotonicClock`) from `app.state` on
+every request. It selects the route first, answering a model that no route
 serves with the ADR-0011 404 before any estimate or reservation, and with no limit headers. It then
 reserves the estimate plus the completion allowance under the caller id and answers a refusal with 429, so
 a 404, 400 or 429 never reaches the embedder. With the cache on it then looks the request up under the caller
@@ -204,7 +226,9 @@ after the settle its 200 is offered to `store`, which keeps only a single `stop`
 or an `EmbeddingError`) runs the route as if the cache were off; any other exception from the lookup is a 500.
 Every 200, and no other status, carries `x-tollgate-cache`: `hit`, `miss` or `skip`.
 `run_route` tries each target once, in order, with the request's `model` replaced by the target's upstream
-model (the client's when it has none), and moves on only after a retryable `ProviderError`. A 200 settles
+model (the client's when it has none), and moves on only after a retryable `ProviderError`. It times
+each call on the monotonic clock and returns an `Attempt` for every call, whatever its outcome; nothing
+logs or counts them yet (T-402 and later). A 200 settles
 once with the serving attempt's `usage.total_tokens`, capped at the bucket capacity (`charged_tokens` with the
 reserve decision's `limit_tokens`, ADR-0012) while the response's `usage` is returned unchanged, keeps the body
 `model` the provider reported, and carries `x-tollgate-provider` and `x-tollgate-fallbacks`. A route that ends without an answer gives the

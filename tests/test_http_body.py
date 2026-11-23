@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.providers.errors import ProviderError
+from app.providers.errors import ProviderError, ReplyTooLargeError
 from app.providers.http_body import JsonReply, post_json, read_capped
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -144,6 +144,43 @@ def test_a_gzip_body_decoding_to_exactly_the_limit_is_returned_decoded(
 
 
 # The error never holds the body.
+
+
+def test_an_oversized_body_raises_reply_too_large_with_its_status() -> None:
+    error = error_of(streamed([pattern(LIMIT_BYTES + 1)], [], status=201))
+    assert isinstance(error, ReplyTooLargeError)
+    assert (error.kind, error.status_code, error.retryable) == ("bad_response", 201, False)
+    assert str(error) == "provider failed: bad_response (HTTP 201)"
+
+
+def test_reply_too_large_is_raised_across_chunks_and_for_a_gzip_body() -> None:
+    parts = [pattern(400, 400 * index) for index in range(5)]
+    assert isinstance(error_of(streamed(parts, [])), ReplyTooLargeError)
+    compressed = gzip.compress(b"a" * (LIMIT_BYTES + 1))
+    assert isinstance(error_of(streamed([compressed], [], headers=GZIP)), ReplyTooLargeError)
+
+
+def test_reply_too_large_is_a_provider_error_whose_status_is_the_one_it_is_given() -> None:
+    error = ReplyTooLargeError(207)
+    assert isinstance(error, ProviderError)
+    assert (error.kind, error.status_code, str(error)) == (
+        "bad_response",
+        207,
+        "provider failed: bad_response (HTTP 207)",
+    )
+
+
+def test_post_json_raises_reply_too_large_only_for_the_size_cap() -> None:
+    for status in REPLY_STATUSES:
+        assert isinstance(
+            failure_of(json_reply(status, padded(LIMIT_BYTES + 1))), ReplyTooLargeError
+        )
+        assert not isinstance(failure_of(json_reply(status, b"not json")), ReplyTooLargeError)
+        assert not isinstance(failure_of(json_reply(status, b"\xff")), ReplyTooLargeError)
+        assert not isinstance(
+            failure_of(streamed([b"not gzip"], [], status=status, headers=GZIP)),
+            ReplyTooLargeError,
+        )
 
 
 def test_an_oversized_body_error_holds_no_part_of_the_body() -> None:
