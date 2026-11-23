@@ -1,9 +1,10 @@
 # Architecture
 
-**Status:** Phase 2 complete. The app serves `GET /health` and `POST /v1/chat/completions`, which is routed by
+**Status:** Phase 3 complete. The app serves `GET /health` and `POST /v1/chat/completions`, which is routed by
 model through a route table to the mock, Ollama, OpenAI or Anthropic provider with ordered fallback, behind API
 key authentication and token-aware rate limiting (tasks T-000 to T-210). With the cache on, it answers a
-request close in meaning to an earlier one from an in-process semantic cache (T-301 to T-306).
+request close in meaning to an earlier one from an in-process semantic cache (T-301 to T-307); no similarity
+threshold is recommended, because the one embedding model evaluated found none (`cache-eval.md`).
 Everything in sections 2 to 4 describes the target design, not current code.
 Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
