@@ -14,7 +14,7 @@ from app.api.errors import register_error_handlers, strip_validation_error_schem
 from app.cache.embedder import Embedder
 from app.cache.ollama_embedder import OllamaEmbedder
 from app.cache.semantic import InMemorySemanticCache, SemanticCache
-from app.clock import Clock, SystemClock
+from app.clock import Clock, MonotonicClock, SystemClock, SystemMonotonicClock
 from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
 from app.limits.memory import InMemoryRateLimiter
@@ -243,6 +243,7 @@ def create_app(
     redis_client: Redis | None = None,
     http_transport: httpx.AsyncBaseTransport | None = None,
     embedder: Embedder | None = None,
+    monotonic_clock: MonotonicClock | None = None,
 ) -> FastAPI:
     """Build the app. With no settings it reads os.environ; start with `uvicorn --factory`.
 
@@ -259,7 +260,8 @@ def create_app(
     cache is off raises ValueError, so a test cannot believe it exercises a cache that is not there.
     The cache is an `InMemorySemanticCache` on that embedder and the clock, kept on
     `app.state.cache` (None when the cache is off). One `UuidIdSource`, on `app.state.id_source`,
-    serves every provider.
+    serves every provider. A `MonotonicClock` (`monotonic_clock`, else a `SystemMonotonicClock`),
+    on `app.state.monotonic_clock`, times each provider call.
     """
     application = TollgateApp(title="Tollgate", lifespan=_lifespan)
     application.state.owned_clients = []
@@ -269,6 +271,9 @@ def create_app(
         raise ValueError("embedder was passed but the cache is off")
     application.state.settings = resolved_settings
     application.state.clock = resolved_clock
+    application.state.monotonic_clock = (
+        monotonic_clock if monotonic_clock is not None else SystemMonotonicClock()
+    )
     # The providers are built before the limiter, so a limiter error never leaves a Redis client
     # behind; an HTTP client built by then is unopened, and nothing needs to close it.
     id_source = UuidIdSource()

@@ -6,7 +6,7 @@ from types import MappingProxyType
 import pytest
 
 from app.api.models import ChatMessage, ChatRequest
-from app.providers.errors import ProviderError, ProviderErrorKind
+from app.providers.errors import ProviderError, ProviderErrorKind, ReplyTooLargeError
 from app.routing.config import (
     BUILTIN_ROUTE_TABLE,
     MockProviderConfig,
@@ -14,6 +14,8 @@ from app.routing.config import (
     TargetConfig,
 )
 from app.routing.router import (
+    Attempt,
+    AttemptOutcome,
     Route,
     RouteFailed,
     RouteOutcome,
@@ -22,7 +24,7 @@ from app.routing.router import (
     UnknownModelError,
     run_route,
 )
-from tests.fakes import ScriptedProvider
+from tests.fakes import FakeMonotonicClock, ScriptedProvider, advancing
 
 FAST_ROUTE = (
     TargetConfig(provider="a", model="up-a"),
@@ -53,10 +55,19 @@ def request(model: str = "fast") -> ChatRequest:
 
 
 def run(
-    route: Route, *providers: ScriptedProvider, client: ChatRequest | None = None
+    route: Route,
+    *providers: ScriptedProvider,
+    client: ChatRequest | None = None,
+    monotonic_clock: FakeMonotonicClock | None = None,
 ) -> RouteOutcome:
     registry = {provider.name: provider for provider in providers}
-    return asyncio.run(run_route(route, registry, client or request()))
+    clock = monotonic_clock if monotonic_clock is not None else FakeMonotonicClock()
+    return asyncio.run(run_route(route, registry, client or request(), monotonic_clock=clock))
+
+
+def failed(outcome: RouteOutcome) -> RouteFailed:
+    assert isinstance(outcome, RouteFailed)
+    return outcome
 
 
 def route_of(*names: str) -> Route:
@@ -155,7 +166,7 @@ NON_RETRYABLE_ERRORS: list[tuple[str, Exception]] = [
 )
 def test_non_retryable_failure_stops_the_route_and_refunds(error: Exception) -> None:
     a, b = ScriptedProvider("a", error=error), ScriptedProvider("b")
-    assert run(route_of("a", "b"), a, b) == RouteFailed(charged=False)
+    assert failed(run(route_of("a", "b"), a, b)).charged is False
     assert len(a.requests) == 1
     assert b.requests == []
 
@@ -163,7 +174,7 @@ def test_non_retryable_failure_stops_the_route_and_refunds(error: Exception) -> 
 def test_bad_response_stops_the_route_and_is_charged() -> None:
     a = ScriptedProvider("a", error=ProviderError("bad_response"))
     b = ScriptedProvider("b")
-    assert run(route_of("a", "b"), a, b) == RouteFailed(charged=True)
+    assert failed(run(route_of("a", "b"), a, b)).charged is True
     assert b.requests == []
 
 
@@ -174,7 +185,7 @@ def test_every_target_failing_tries_each_once_in_order_then_refunds() -> None:
         ScriptedProvider("b", error=ProviderError("upstream_status", 502), log=log),
         ScriptedProvider("c", error=ProviderError("connection"), log=log),
     ]
-    assert run(route_of("a", "b", "c"), *providers) == RouteFailed(charged=False)
+    assert failed(run(route_of("a", "b", "c"), *providers)).charged is False
     assert log == ["a", "b", "c"]
 
 
@@ -182,7 +193,7 @@ def test_bad_response_after_a_fallback_is_charged_and_ends_the_route() -> None:
     a = ScriptedProvider("a", error=ProviderError("timeout"))
     b = ScriptedProvider("b", error=ProviderError("bad_response"))
     c = ScriptedProvider("c")
-    assert run(route_of("a", "b", "c"), a, b, c) == RouteFailed(charged=True)
+    assert failed(run(route_of("a", "b", "c"), a, b, c)).charged is True
     assert c.requests == []
 
 
@@ -208,3 +219,118 @@ def test_each_target_gets_its_upstream_model_or_the_clients_and_the_rest_is_unch
     # The third target has no upstream model, so it gets the client's model.
     assert c.requests[0].model_dump() == before
     assert client.model_dump() == before
+
+
+# Attempts (T-401, ADR-0016). Steps are powers of two, so the float sums are exact.
+
+OUTCOME_CASES: list[tuple[str, Exception, AttemptOutcome]] = [
+    ("connection", ProviderError("connection"), "connection"),
+    ("timeout", ProviderError("timeout"), "timeout"),
+    ("rate_limited", ProviderError("rate_limited", 429), "rate_limited"),
+    ("upstream_500", ProviderError("upstream_status", 503), "upstream_status"),
+    ("upstream_400", ProviderError("upstream_status", 400), "upstream_status"),
+    ("bad_response", ProviderError("bad_response", 200), "bad_response"),
+    ("reply_too_large", ReplyTooLargeError(200), "reply_too_large"),
+    ("runtime_error", RuntimeError("boom"), "error"),
+]
+
+
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [case[1:] for case in OUTCOME_CASES],
+    ids=[case[0] for case in OUTCOME_CASES],
+)
+def test_a_failed_call_is_recorded_with_its_outcome_and_duration(
+    error: Exception, outcome: AttemptOutcome
+) -> None:
+    clock = FakeMonotonicClock(start_seconds=100.0)
+    a = ScriptedProvider("a", error=error, on_call=advancing(clock, 0.25))
+    result = failed(run(route_of("a"), a, monotonic_clock=clock))
+    assert result.attempts == (Attempt("a", outcome, 0.25),)
+
+
+def test_a_served_call_is_recorded_as_ok_with_its_duration() -> None:
+    clock = FakeMonotonicClock(start_seconds=7.0)
+    a = ScriptedProvider("a", on_call=advancing(clock, 0.5))
+    outcome = run(route_of("a", "b"), a, ScriptedProvider("b"), monotonic_clock=clock)
+    assert isinstance(outcome, Served)
+    assert outcome.attempts == (Attempt("a", "ok", 0.5),)
+
+
+def test_each_attempt_is_timed_from_its_own_start() -> None:
+    clock = FakeMonotonicClock()
+    a = ScriptedProvider("a", error=ProviderError("timeout"), on_call=advancing(clock, 0.25))
+    b = ScriptedProvider(
+        "b", error=ProviderError("rate_limited", 429), on_call=advancing(clock, 1.0)
+    )
+    c = ScriptedProvider("c", on_call=advancing(clock, 0.5))
+    outcome = run(route_of("a", "b", "c"), a, b, c, monotonic_clock=clock)
+    assert isinstance(outcome, Served)
+    assert outcome.fallbacks == 2
+    assert outcome.attempts == (
+        Attempt("a", "timeout", 0.25),
+        Attempt("b", "rate_limited", 1.0),
+        Attempt("c", "ok", 0.5),
+    )
+
+
+def test_a_route_that_runs_out_of_targets_reports_every_attempt() -> None:
+    clock = FakeMonotonicClock()
+    providers = [
+        ScriptedProvider("a", error=ProviderError("timeout"), on_call=advancing(clock, 0.25)),
+        ScriptedProvider("b", error=ProviderError("connection"), on_call=advancing(clock, 0.5)),
+    ]
+    result = failed(run(route_of("a", "b"), *providers, monotonic_clock=clock))
+    assert (result.charged, result.attempts) == (
+        False,
+        (Attempt("a", "timeout", 0.25), Attempt("b", "connection", 0.5)),
+    )
+
+
+def test_a_non_retryable_failure_after_a_fallback_reports_both_attempts() -> None:
+    clock = FakeMonotonicClock()
+    a = ScriptedProvider("a", error=ProviderError("timeout"), on_call=advancing(clock, 0.25))
+    b = ScriptedProvider("b", error=ReplyTooLargeError(200), on_call=advancing(clock, 0.5))
+    result = failed(
+        run(route_of("a", "b", "c"), a, b, ScriptedProvider("c"), monotonic_clock=clock)
+    )
+    assert (result.charged, result.attempts) == (
+        True,
+        (Attempt("a", "timeout", 0.25), Attempt("b", "reply_too_large", 0.5)),
+    )
+
+
+def test_an_unexpected_exception_after_a_fallback_reports_both_attempts() -> None:
+    clock = FakeMonotonicClock()
+    a = ScriptedProvider("a", error=ProviderError("connection"), on_call=advancing(clock, 1.0))
+    b = ScriptedProvider("b", error=RuntimeError("boom"), on_call=advancing(clock, 0.25))
+    result = failed(run(route_of("a", "b"), a, b, monotonic_clock=clock))
+    assert (result.charged, result.attempts) == (
+        False,
+        (Attempt("a", "connection", 1.0), Attempt("b", "error", 0.25)),
+    )
+
+
+def test_a_call_that_takes_no_time_has_a_zero_duration() -> None:
+    result = failed(run(route_of("a"), ScriptedProvider("a", error=ProviderError("timeout"))))
+    assert result.attempts == (Attempt("a", "timeout", 0.0),)
+
+
+def test_time_between_calls_is_not_part_of_any_attempt() -> None:
+    clock = FakeMonotonicClock()
+    # Each provider advances the clock before it fails, and a retryable failure moves straight on.
+    a = ScriptedProvider("a", error=ProviderError("timeout"), on_call=advancing(clock, 0.25))
+    b = ScriptedProvider("b", on_call=advancing(clock, 0.5))
+    outcome = run(route_of("a", "b"), a, b, monotonic_clock=clock)
+    assert isinstance(outcome, Served)
+    assert (
+        sum(attempt.duration_seconds for attempt in outcome.attempts) == clock.monotonic_seconds()
+    )
+
+
+def test_an_attempt_is_immutable_and_a_reply_too_large_is_not_a_plain_bad_response() -> None:
+    attempt = Attempt("a", "ok", 0.25)
+    with pytest.raises(AttributeError):
+        attempt.outcome = "error"  # type: ignore[misc]
+    plain = failed(run(route_of("a"), ScriptedProvider("a", error=ProviderError("bad_response"))))
+    assert plain.attempts[0].outcome == "bad_response"

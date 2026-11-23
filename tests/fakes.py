@@ -1,7 +1,7 @@
 """Test doubles shared across tests."""
 
 from array import array
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Literal
 
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
@@ -15,6 +15,21 @@ class FakeClock:
         self._now_seconds = start_seconds
 
     def now_seconds(self) -> float:
+        return self._now_seconds
+
+    def advance(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("advance seconds must not be negative")
+        self._now_seconds += seconds
+
+
+class FakeMonotonicClock:
+    """A monotonic clock that moves only when advance() is called."""
+
+    def __init__(self, start_seconds: float = 0.0) -> None:
+        self._now_seconds = start_seconds
+
+    def monotonic_seconds(self) -> float:
         return self._now_seconds
 
     def advance(self, seconds: float) -> None:
@@ -50,8 +65,10 @@ class ScriptedProvider:
         completion_tokens: int = 17,
         finish_reason: Literal["stop", "length", "content_filter"] = "stop",
         log: list[str] | None = None,
+        on_call: Callable[[], None] | None = None,
     ) -> None:
         self.name = name
+        self._on_call = on_call
         self.requests: list[ChatRequest] = []
         self._error = error
         self._reported_model = reported_model
@@ -63,6 +80,8 @@ class ScriptedProvider:
     async def complete(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
         self._log.append(self.name)
+        if self._on_call is not None:
+            self._on_call()  # runs inside the call, before it fails or answers
         if self._error is not None:
             raise self._error
         return ChatResponse(
@@ -83,6 +102,11 @@ class ScriptedProvider:
                 total_tokens=self._prompt_tokens + self._completion_tokens,
             ),
         )
+
+
+def advancing(clock: FakeMonotonicClock, seconds: float) -> Callable[[], None]:
+    """An `on_call` that moves `clock` by `seconds` while the provider call runs."""
+    return lambda: clock.advance(seconds)
 
 
 class FakeEmbedder:
