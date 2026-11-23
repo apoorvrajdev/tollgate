@@ -9,6 +9,41 @@ A task becomes `done` in the pull request that delivers it (the status is set in
 takes effect when the pull request merges). `in-progress` and `review` exist only on the task branch; `main`
 shows `todo`, `blocked` or `done`.
 
+## Current phase: 4 - Operations
+
+Every request writes one JSON log line built only from bounded fields, and `/metrics`, behind a token of its
+own, exports Prometheus metrics written with the standard library. These include the settle cap, the reply size
+cap, provider attempts and cache lookups. Durations come from an injected monotonic clock. The gateway ships as a
+digest-pinned, non-root image with a Compose stack (gateway, Redis, optional Ollama), started and smoke-tested by
+a CI job. The deployment target is one host running that stack. Load is measured at a fixed arrival rate from
+each request's due time, against a fake upstream, and the cache scan and the embedding call are measured too.
+Every figure comes from the owner's recorded runs. No new dependency. Planned 2026-11-23; ADR-0016, ADR-0017
+and ADR-0018 are proposed and must be accepted before T-401 starts. The status lines of the ADRs they amend
+are updated in the pull request that records the acceptance, as in Phase 3.
+
+**Gate (owner signs off):**
+
+- [ ] Every Phase 4 task is `done`, and `python scripts/check.py` is green locally and in CI
+- [ ] ADR-0016, ADR-0017 and ADR-0018 accepted or revised, the status lines of ADR-0013 and ADR-0014 updated
+      to name ADR-0016, and ADR-0006's to name ADR-0017
+- [ ] Durations come from the injected monotonic clock, never the wall clock, and tests use a fake
+- [ ] Every request writes one JSON log line holding only the ADR-0016 fields, and a test proves that no prompt,
+      model, API key, key digest, caller id, header value or query string reaches the log
+- [ ] `/metrics` exists only when a metrics token is set, refuses API keys, is absent from the OpenAPI document,
+      and exports the ADR-0016 metric set, including the settle cap, the reply size cap and the embedder failures
+- [ ] The image builds from a digest-pinned base, runs as a non-root user and holds only the app and its
+      dependencies, and the CI job `container` starts the Compose stack and passes its smoke checks on `main`
+- [ ] The deployment target is the one ADR-0017 records
+- [ ] Every figure in the README or `docs/benchmarks.md` comes from a recorded run with its settings, including
+      where the generator ran, and a run that fails the validity check is reported as invalid; or the owner
+      waives a run in writing
+- [ ] Tests use no network and no paid API. The exceptions are the CI Redis container (ADR-0006) and, in the
+      `container` job only, the image and wheel downloads and the localhost traffic to its own Compose stack
+      (ADR-0017)
+- [ ] Every Phase 4 task that adds tests has a mutation table with no unexplained survivor
+- [ ] README and ARCHITECTURE describe what is built, and every claim comes from a recorded run
+- [ ] Every commit is authored by the owner, with no co-author trailers
+
 ## Phase 3 - Semantic caching (complete)
 
 An eligible chat completion (last message from the user) is embedded by a local Ollama and looked up, after the
@@ -114,8 +149,9 @@ No gateway features yet. The owner signed off the gate on 2026-11-12, and Phase 
 Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a required check, then T-002, then
 T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-204,
 then T-208 and T-209 (both added 2026-11-14), then T-205 and T-206, then T-207 and T-210 (added
-2026-11-14) in either order. Delivery order in Phase 3: T-301 to T-307 in number order. The rows below are in
-delivery order; the cards further down are listed by ID.
+2026-11-14) in either order. Delivery order in Phase 3: T-301 to T-307 in number order. Delivery order in
+Phase 4: T-401 to T-409 in number order. The rows below are in delivery order; the cards further down are listed
+by ID.
 
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -149,6 +185,15 @@ delivery order; the cards further down are listed by ID.
 | T-305 | Build the cache in the app and share the id source | 3 | done | T-303, T-304 |
 | T-306 | Semantic cache on chat completions | 3 | done | T-305 |
 | T-307 | The owner's eval run, the recommended threshold and the cache guide | 3 | done | T-304, T-306 |
+| T-401 | Request timing, route attempts and the reason for a skip | 4 | todo | Phase 3 gate; ADR-0016, ADR-0017 and ADR-0018 accepted |
+| T-402 | Structured request log | 4 | todo | T-401 |
+| T-403 | Metrics registry and the Prometheus text format | 4 | todo | T-402 |
+| T-404 | Metrics on the app and the `/metrics` endpoint | 4 | todo | T-402, T-403 |
+| T-405 | Container image, Compose stack and the CI container check | 4 | todo | T-404 |
+| T-406 | Fake upstream, benchmark route files and the fixed-rate runner | 4 | todo | T-401 |
+| T-407 | Load report: statistics, validity check and command line | 4 | todo | T-406 |
+| T-408 | Cache scan and embedding latency benchmarks | 4 | todo | T-407 |
+| T-409 | The owner's benchmark runs and the operations guide | 4 | todo | T-405, T-407, T-408 |
 
 ---
 
@@ -1498,6 +1543,449 @@ delivery order; the cards further down are listed by ID.
   the cache guide`, `docs(tasks): complete T-307`.
 - **Size:** about 120 lines.
 
+### T-401 - Request timing, route attempts and the reason for a skip
+
+- **Status:** todo
+- **Goal:** the code reports what each request did, timed on a monotonic clock: each target tried, with its
+  outcome and duration, whether a reply passed the size cap, and why a lookup was skipped. Nothing is logged or
+  exported yet.
+- **Context:** ADR-0010, ADR-0013, ADR-0014, ADR-0016, `app/clock.py`, `app/providers/errors.py`,
+  `app/providers/http_body.py`, `app/routing/router.py`, `app/cache/semantic.py`, `app/api/chat.py`,
+  `app/main.py`, `tests/fakes.py`, `tests/test_router.py`, `tests/test_http_body.py`,
+  `tests/test_semantic_cache.py`, ARCHITECTURE section 3.
+- **Depends on:** the Phase 3 gate (signed off); ADR-0016, ADR-0017 and ADR-0018 accepted.
+- **Deliverables:**
+  - `app/clock.py`: the `MonotonicClock` protocol (`monotonic_seconds() -> float`) and `SystemMonotonicClock`,
+    which reads `time.perf_counter()`. `tests/fakes.py`: a `FakeMonotonicClock` that moves only when a test
+    advances it, and a fake provider that advances it by a set step before it answers or raises.
+  - `app/providers/errors.py`: `ReplyTooLargeError(ProviderError)`, always of kind `bad_response`, with the
+    status. `read_capped` raises it in place of the plain `ProviderError` it raises today. Its message keeps the
+    ADR-0010 form.
+  - `app/routing/router.py`: `AttemptOutcome` (a `Literal` of `ok`, the five failure kinds, `reply_too_large` and
+    `error`) and the frozen dataclass `Attempt(provider_name, outcome, duration_seconds)`. `run_route` takes a
+    keyword `monotonic_clock` and times each provider call. `Served` and `RouteFailed` gain `attempts:
+    tuple[Attempt, ...]`. Which target is tried, and what is charged or refunded, do not change.
+  - `app/cache/semantic.py`: `Skip` gains `reason: Literal["not_eligible", "embedder_failed"]`.
+  - `create_app()` takes `monotonic_clock: MonotonicClock | None = None`, builds a `SystemMonotonicClock` when it
+    is `None`, and keeps it on `app.state.monotonic_clock`. The chat route passes it to `run_route`.
+  - ARCHITECTURE section 3 adds `MonotonicClock`, `Attempt`, `ReplyTooLargeError` and the `reason` of `Skip`.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Every existing behavioural test passes. An existing test changes only to pass the new argument, to name a
+     `Skip` reason, or, where it compares a whole `RouteFailed` or `Served` with `==` (as
+     `tests/test_router.py` does), to compare `charged` or the served fields and `attempts` explicitly.
+  2. On a three-target route whose first target times out and whose second answers 503, the third answers.
+     `attempts` is exactly `timeout`, `upstream_status` and `ok`, with the provider names in route order and each
+     duration equal to what the fake providers advanced the fake monotonic clock by.
+  3. Every outcome is pinned by its own case: `ok`, `connection`, `timeout`, `rate_limited`, `upstream_status`
+     (both a retryable 500 and a 400 that ends the route), `bad_response` (invalid JSON), `reply_too_large`
+     and `error` (a `RuntimeError`). A `RouteFailed` holds every attempt up to the one that ended the route.
+  4. A reply over the cap raises `ReplyTooLargeError`. It is a `ProviderError` with kind `bad_response` and the
+     reply's status, and the route still ends charged as reserved, as ADR-0013 says. Invalid JSON is not a
+     `ReplyTooLargeError`.
+  5. A request whose last message is not from the user gives `Skip("not_eligible")`, and an `EmbeddingError`
+     gives `Skip("embedder_failed")`. Any other embedder exception still propagates.
+  6. Durations follow the monotonic clock alone: with the wall `Clock` advanced and the monotonic clock still,
+     every duration is 0, and the other way round each is the monotonic step.
+- **Verification:** `python scripts/check.py` green; mutation table: a duration from the wall clock, or taken
+  before the call; the outcome taken from the wrong attempt; `attempts` left empty at each of the three
+  `RouteFailed` returns (a non-retryable failure, a non-`ProviderError` exception, the route running out of
+  targets); the attempt that ended the route left out; `Served` without its `ok` attempt;
+  `reply_too_large` reported as `bad_response`, by checking the base class first; `ReplyTooLargeError` not
+  derived from `ProviderError`, which makes the route uncharged; the two skip reasons swapped;
+  `SystemMonotonicClock` reading `time.time()`. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-401-request-timing`; `feat(providers): raise ReplyTooLargeError at the reply
+  size cap`, `feat(routing): record each attempt on a monotonic clock`, `feat(cache): give each skip a reason`,
+  `docs(tasks): complete T-401`.
+- **Size:** about 450 lines, most of it tests, counted as formatted lines. Above the ~400-line plan threshold;
+  the owner approves the size with this card.
+
+### T-402 - Structured request log
+
+- **Status:** todo
+- **Goal:** every HTTP request writes one JSON line holding the ADR-0016 fields and nothing else.
+- **Context:** ADR-0008, ADR-0016, `app/main.py`, `app/api/chat.py`, `app/api/auth.py`, the T-401 types,
+  `tests/test_chat_rate_limits.py`, `tests/test_chat_cache.py`, `tests/test_auth_raw_headers.py` (calling the
+  ASGI app with hand-built scopes).
+- **Depends on:** T-401.
+- **Deliverables:**
+  - `app/observability/__init__.py` and `app/observability/record.py`: `ChatRecord`, which the chat route fills
+    on `request.state` as it goes. It holds the serving provider, the fallbacks, the cache result, the skip
+    reason, the reserved and charged tokens, whether the settle was capped, the attempts and the lookup's
+    duration. Each field stays `None` until its step has run.
+  - `app/observability/middleware.py`: a pure ASGI middleware (not `BaseHTTPMiddleware`). It times each HTTP
+    request on the monotonic clock and takes the status from `http.response.start`. Once the response has been
+    sent it hands the result to its observers. The log is the first observer, and T-404 adds metrics. The
+    middleware maps the path to `/v1/chat/completions`, `/health` or `/metrics`, and every other path to `other`,
+    FastAPI's documentation routes included. A handler that raises before a
+    response started is recorded as 500, and the exception propagates.
+  - `app/observability/logs.py`: `JsonFormatter`, which writes ADR-0016's fields for `tollgate.request` and only
+    `time`, `level`, `logger`, `message` and `exception_type` for any other logger, and the observer that writes
+    to `tollgate.request`.
+  - `deploy/logging.json`: the dictConfig file for `uvicorn --log-config`, sending `tollgate.request` and
+    uvicorn's loggers to stdout through `JsonFormatter`.
+  - `create_app()` adds the middleware, and turns FastAPI's native telemetry off.
+  - ARCHITECTURE section 5 describes the record, the middleware and the log.
+- **Contract:** unchanged (the snapshot test stays green).
+- **Acceptance criteria:**
+  1. The key set and values of the line are pinned for each case: a 200 `miss`, a 200 `hit`, a 200 `skip` with
+     each reason, the cache off, a 400, a 401, a 404 for an unknown model, a 404 for an unknown path (`path`
+     `other`), a 200 for `GET /openapi.json` (`path` `other`), a 429, a 502 after one fallback, and a 500 from a
+     raising limiter. Durations come from the fake
+     monotonic clock, and `time` is pinned by its format.
+  2. A unique marker is placed in the prompt, the model, the API key, a header value, the query string and the
+     client address of a hand-built ASGI scope. A second case makes the limiter raise an exception whose
+     message holds a marker. With every logger in `deploy/logging.json` set up, no line from any logger
+     contains a marker, the key's SHA-256 digest or the caller id. The 500's uvicorn-style record carries only
+     `exception_type`.
+  3. Each request writes exactly one line, which is valid JSON and pure ASCII, including with a provider name
+     holding `"` and `\`. A unit test of `JsonFormatter` gives a field U+2028, U+0085 and a control character,
+     and each comes out escaped on one line.
+  4. An answer above the capacity logs `settle_capped: true` with `charged_tokens` equal to the capacity, and an
+     answer at the capacity logs `false`.
+  5. `deploy/logging.json` loads through `logging.config.dictConfig` in a test, and a record sent to
+     `tollgate.request` then comes out through `JsonFormatter`.
+  6. A raising handler still produces one line with status 500, and the exception still propagates.
+  7. A test pins that FastAPI's native telemetry is turned off on the app.
+  8. Sending the response body advances the fake monotonic clock, and the logged duration includes that step.
+  9. Two requests interleaved on the event loop (one held inside its provider while the other completes) each
+     log their own provider and tokens.
+- **Verification:** `python scripts/check.py` green; mutation table: the model or the caller id added to the
+  fields; the raw path in place of the mapped one; a served documentation route given its own path value; the
+  duration from the wall clock; the record written at
+  `http.response.start` instead of after the body (killed by criterion 8); the record kept on `app.state`
+  instead of the request (killed by criterion 9); the raise path not logged, or logged twice; `ensure_ascii`
+  turned off; the exception message or traceback written for another logger; the cap flag inverted; `cache`
+  reported as `skip` when no lookup ran; telemetry left on. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-402-request-log`; `feat(observability): log one JSON record per request`,
+  `build(deploy): add the uvicorn logging config`, `docs(tasks): complete T-402`.
+- **Size:** about 600 lines, most of it tests. Above the ~400-line plan threshold; the owner approves the size
+  with this card, and is told as soon as the draft passes it.
+
+### T-403 - Metrics registry and the Prometheus text format
+
+- **Status:** todo
+- **Goal:** a registry of counters and histograms, with no dependency, writes Prometheus text format 0.0.4
+  exactly. Nothing in the app uses it yet.
+- **Context:** ADR-0016 (the format rules it cites), `app/observability/`.
+- **Depends on:** T-402, which creates `app/observability/`.
+- **Deliverables:**
+  - `app/observability/metrics.py`:
+    - `Counter`, which declares its label names and its known label sets up front, and whose `inc(labels,
+      amount)` rejects a negative or non-finite amount. A counter may name one label whose values are added on
+      first use (ADR-0016 uses this for `status` only). Such a counter declares the allowed values of each of
+      its other labels instead of complete label sets, and renders nothing for a set until its first use. Any
+      label set outside what a counter declares is rejected.
+    - `Histogram`, with fixed ascending buckets and `observe(labels, seconds)`, which rejects a non-finite value
+      and an undeclared label set.
+    - `MetricsRegistry`, whose `render() -> str` writes the text format. It rejects a duplicate metric name, a
+      metric or label name outside the format's character sets, a label name starting with `__`, and `le` as
+      a histogram label name.
+    - The `CONTENT_TYPE` constant.
+    - Samples are written in registration order, with label sets in declaration order and then, for the
+      first-use label, in first-use order. Integers are written as integers, floats with `repr`, and infinity as
+      `+Inf`.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. A registry with one labelled counter and one labelled histogram renders a pinned string exactly: HELP and
+     TYPE lines, samples, and the final line feed.
+  2. Escaping: a label value holding `\`, `"` and a line feed, and HELP text holding `\` and a line feed, are
+     each escaped as the format says, backslash first.
+  3. Histogram buckets are cumulative. A value equal to a bound counts in that bucket (`le` means at most),
+     `le="+Inf"` equals `_count`, and `_sum` is exact for binary-exact values.
+  4. Declared label sets render at 0 before any use. A first-use value appears only after its first
+     increment, and in first-use order.
+  5. Each rejection above is pinned by a case, including, on a counter with a first-use label, a value of another
+     label that was not declared. A `"` in HELP text is written as is, since HELP escapes only `\` and the line
+     feed.
+  6. Every line of a rendered registry with several metrics matches the format's line grammar, as checked by a
+     small checker in the test, and every name has its TYPE line before its first sample.
+- **Verification:** `python scripts/check.py` green; mutation table: `<` in place of `<=` at a bucket bound;
+  buckets not cumulative; the `+Inf` bucket dropped; each escape dropped, and backslash escaped last; the final
+  line feed dropped; TYPE written after the samples; a negative amount accepted; a non-finite amount accepted by
+  `inc`, or a non-finite value by `observe`; a duplicate name, an invalid name, a `__` label or `le` on a
+  histogram accepted; an undeclared label set accepted; an undeclared value of a counter's other label accepted
+  next to a first-use label; `"` escaped in HELP text; declared label sets not
+  pre-exported. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-403-metrics-registry`; `feat(observability): add a metrics registry with
+  Prometheus text output`, `docs(tasks): complete T-403`.
+- **Size:** about 400 lines, most of it tests.
+
+### T-404 - Metrics on the app and the `/metrics` endpoint
+
+- **Status:** todo
+- **Goal:** with a metrics token set, `GET /metrics` exports the ADR-0016 metric set for the app's own requests,
+  and nothing else can read it.
+- **Context:** ADR-0008, ADR-0016, `app/settings.py`, `app/main.py`, `app/api/auth.py`, `app/observability/`,
+  `tests/test_settings.py`, `tests/test_chat_openapi.py`, `tests/test_openapi_snapshot.py`, `docs/setup.md`
+  ("Configuration").
+- **Depends on:** T-402, T-403.
+- **Deliverables:**
+  - `app/settings.py`: `TOLLGATE_METRICS_TOKEN`, optional. Set, it must not be blank, must be at least 32
+    characters, and must differ from every API key, each failure being a `SettingsError` naming the variable.
+    It is kept as a `SecretStr`.
+  - `create_app()` builds one `MetricsRegistry` with the ADR-0016 set on `app.state.metrics`, declaring every
+    label set ADR-0016 lists as known at startup, with `status` as the one first-use label. The middleware's
+    second observer updates the registry from the request record.
+  - `GET /metrics`, registered only when the token is set, with `include_in_schema=False`. It checks the bearer
+    token as ADR-0016 says, answers with `CONTENT_TYPE`, and otherwise sends the 401 with code
+    `invalid_metrics_token`.
+  - `docs/setup.md` lists the variable. The full metrics guide is T-409.
+  - ARCHITECTURE section 5 describes the registry and the endpoint.
+- **Contract:** unchanged. The route is left out of the OpenAPI document, and a test pins that.
+- **Acceptance criteria:**
+  1. With the token unset, `/metrics` gets the app's ordinary 404.
+  2. A blank token, a token of 31 characters, and a token equal to one of the API keys each fail startup with a
+     `SettingsError` that names the variable and not the value. A token of 32 characters is accepted.
+  3. These each get the metrics 401 (code `invalid_metrics_token`, `WWW-Authenticate: Bearer`): no header, a
+     wrong token, an API key, the `Basic` scheme, two `Authorization` headers, and a header that is not valid
+     UTF-8, sent through a hand-built ASGI scope. The metrics token on the chat route gets the chat 401.
+  4. The right token gets 200 with the exact Content-Type. After a scripted sequence (a miss after one
+     fallback, a hit, a skip with `embedder_failed`, a 429, a 404, a 502 from a reply over the cap, and a 200
+     whose settle was capped), every counter in the set has the exact expected value. With the cache off, a
+     200 is counted with `cache="off"`.
+  5. A fresh app exports exactly the label sets ADR-0016 lists as known at startup, each at 0, and no
+     `tollgate_http_requests_total` series until a request has been answered.
+  6. A duration from the fake monotonic clock lands in the expected histogram bucket, and on a bound it lands in
+     the bucket of that bound.
+  7. Two apps built in one process have separate registries.
+  8. The OpenAPI snapshot is unchanged, and `/metrics` is not in the document.
+- **Verification:** `python scripts/check.py` green; mutation table: the route registered with the token unset;
+  an API key accepted; the minimum length off by one; the API-key comparison removed; a module-level registry
+  shared by apps; `include_in_schema` left on; a skip counted as a miss; the cache off counted as `skip`;
+  `tollgate_settle_capped_total` not incremented; `tollgate_tokens_charged_total` fed the uncapped amount; the
+  API-key 401 body sent in place of the metrics one. The constant-time comparison cannot be told apart by a
+  test; the table lists it as reviewed, not mutated. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-404-metrics-endpoint`; `feat(settings): read the metrics token`,
+  `feat(observability): export request metrics at /metrics`, `docs(tasks): complete T-404`.
+- **Size:** about 550 lines, most of it tests. Above the ~400-line plan threshold; the owner approves the size
+  with this card.
+
+### T-405 - Container image, Compose stack and the CI container check
+
+- **Status:** todo
+- **Goal:** `docker compose up` starts the gateway on Redis from a pinned, non-root image, and CI proves it on
+  every pull request.
+- **Context:** ADR-0006, ADR-0016, ADR-0017, `.github/workflows/ci.yml`, `app/main.py`, `deploy/logging.json`,
+  `docs/routes.example.json`, `tests/test_routes_example.py`.
+- **Depends on:** T-404.
+- **Deliverables:**
+  - `Dockerfile` and `.dockerignore`, as ADR-0017 says. The `.dockerignore` excludes everything with `*` and
+    lists back only what the build copies.
+  - `compose.yaml`, as ADR-0017 says, and `deploy/routes.compose.json`, a route table with the mock provider only.
+  - `scripts/smoke_container.py`, standard library only. It sends:
+    - `GET /health`, which must answer 200
+    - a chat request with the key, which must answer 200 with `x-tollgate-provider`, `x-tollgate-cache: skip`
+      and the limit headers
+    - a chat request with no key, which must answer 401
+    - `/metrics` with the token, which must answer 200 and count that chat 200
+    - `/metrics` with no token, which must answer 401
+    - Its checks are functions over a status, headers and a body, so they can be unit-tested.
+  - A new job, `container`, in `ci.yml`:
+    - a random key and token generated with Python's `secrets` and written to `$GITHUB_ENV`
+    - hadolint (the `hadolint/hadolint` image pinned by digest)
+    - `docker compose config --quiet`, then `docker compose build` and `docker compose up --wait`
+    - the smoke script
+    - a check that at least one `tollgate:bucket:*` key exists in Redis
+    - a check that the gateway's logs hold a JSON line with `event` `http_request`
+    - a check that `id -u` in the gateway is not 0
+    - a check of the file list under the image's app directory (the route table is mounted at
+      `/config/routes.json`, outside it)
+    - `docker compose stop gateway`, after which uvicorn's "Application shutdown complete." is in the log and
+      the container was not killed (its exit code is not 137). The exact exit code is recorded from the first
+      run, since it depends on how uvicorn ends after a signal as PID 1.
+    - `docker compose down`, run even when an earlier step fails
+  - ARCHITECTURE: section 2's Operations row and section 5 (the image, the Compose stack, `deploy/`, and the
+    one-host deployment target).
+  - `tests/test_deploy_files.py` checks:
+    - `deploy/routes.compose.json` loads through `Settings.from_env`
+    - the Redis tag in `compose.yaml` equals the one in `ci.yml`
+    - the `FROM` lines carry a digest
+    - `compose.yaml` takes the key and the token only as `${...:?...}` references
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. The `container` job is green on the pull request with every step above.
+  2. hadolint passes with no ignored rule, or each ignored rule is named with its reason in the `Dockerfile`.
+  3. The image's app directory holds only `app/`, `deploy/logging.json` and the virtual environment. It holds no
+     `.env*`, `.git`, `tests/`, `docs/` or local notes.
+  4. The gateway runs as a non-root user, and stopping it runs the lifespan shutdown within the grace period.
+  5. The pytest checks above pass, and each fails when its file is changed to break it.
+  6. A search finds no key or real secret in any committed file, `ci.yml` included: the job's key and token
+     exist only at run time.
+  7. OWNER-CHECK (optional): the owner decides whether `container` becomes a required check in `protect-main`.
+     The Log records the decision.
+- **Verification:** `python scripts/check.py` green; the `container` job green; mutation table for the pytest
+  tests and the smoke checks: a digest removed, the Redis tags made to differ, a key written literally in
+  `compose.yaml`, a smoke check that accepts a 401 as 200, and one that ignores a missing header. The job's
+  wiring is proven only by its run, so the first push is made early. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `build/t-405-container`; `build(docker): add the gateway image`, `build(compose): add
+  the compose stack`, `ci(container): build and smoke-test the image`, `docs(architecture): describe the image
+  and the deployment target`, `docs(tasks): complete T-405`.
+- **Size:** about 400 lines.
+
+### T-406 - Fake upstream, benchmark route files and the fixed-rate runner
+
+- **Status:** todo
+- **Goal:** load can be sent at a fixed arrival rate, with each request timed from its due time, against a fake
+  upstream reached through the gateway's real `openai` adapter. The raw samples come out; the statistics and
+  the report are T-407.
+- **Context:** ADR-0005, ADR-0016 (the monotonic clock), ADR-0018, `app/clock.py`, `app/providers/openai.py`,
+  `app/main.py` (`http_transport=`), `docs/routes.example.json`, `tests/test_routes_example.py`.
+- **Depends on:** T-401.
+- **Deliverables:**
+  - `scripts/fake_upstream.py`: `build_app(delay_seconds, sleep)`, a Starlette app answering `POST
+    /v1/chat/completions` with a fixed OpenAI-shaped body after `await sleep(delay_seconds)`. A `main` serves it
+    with uvicorn, with the delay given in milliseconds and defaulting to 50.
+  - `deploy/bench/routes.fake-upstream.json` (scenario B: one `openai` provider at the fake upstream's local
+    address, its key named by `api_key_env`) and `deploy/bench/routes.mock.json` (scenario C: the mock provider).
+  - `scripts/bench_load.py`, part one:
+    - the schedule: request i is due at the start plus i divided by the rate
+    - the runner, on an injected `MonotonicClock`, sleep function and `httpx.AsyncClient`. It sends each request
+      as its own task with one fixed body, and returns per request the due time, the hand-over time, the end
+      time, the status or the transport error, and whether it was a warm-up request. It also returns the peak
+      number of requests in flight.
+    - the client: no connection cap unless one is given
+  - `tests/test_fake_upstream.py`, `tests/test_bench_runner.py`, and a test that loads both route files through
+    `Settings.from_env` with placeholder values.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Request i is due at the start plus i divided by the rate. With integer settings, the number of requests is
+     the rate times the warm-up plus the duration, exactly, and the first rate times warm-up requests are marked
+     as warm-up.
+  2. With a fake clock and a fake transport, a request handed over 5 ms after its due time that takes 10 ms has
+     a due time, hand-over time and end time 0, 5 and 15 ms apart.
+  3. Requests are sent without waiting for earlier answers: with every answer slower than the interval, each
+     hand-over happens at its due time, and the peak in flight equals the expected overlap.
+  4. A transport error and a non-200 are each returned with the request, never raised out of the runner.
+  5. Through `create_app()` with `deploy/bench/routes.fake-upstream.json` and an `http_transport` of
+     `httpx.ASGITransport` on the fake upstream, a chat request gets a 200, which proves that the adapter
+     accepts the fake's body. The fake calls `sleep` once with the configured delay.
+  6. Both route files load through `Settings.from_env`.
+- **Verification:** `python scripts/check.py` green; mutation table: the due time computed from the previous
+  answer instead of the schedule; requests awaited one after another (a closed loop, killed by criterion 3);
+  the hand-over time taken after the response; warm-up marking off by one; a transport error raised out of the
+  runner; the fake's delay ignored; a connection cap applied by default. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-406-load-runner`; `feat(bench): add a fake OpenAI-compatible upstream`,
+  `feat(bench): send load at a fixed arrival rate`, `docs(tasks): complete T-406`.
+- **Size:** about 450 lines, most of it tests. Above the ~400-line plan threshold; the owner approves the size
+  with this card.
+
+### T-407 - Load report: statistics, validity check and command line
+
+- **Status:** todo
+- **Goal:** a run of the T-406 runner becomes a JSON report and a Markdown table with ADR-0018's figures,
+  validity check and settings, started from the command line.
+- **Context:** ADR-0005, ADR-0018, `scripts/bench_load.py`, `scripts/eval_cache.py` (the report style),
+  `tests/test_cache_evaluation.py`.
+- **Depends on:** T-406.
+- **Deliverables:**
+  - `scripts/bench_load.py`, part two:
+    - the summary statistics: latency from the due time to the end, lag from the due time to the hand-over,
+      `statistics.quantiles` with `method="inclusive"`, warm-up requests left out
+    - the validity check and the 10,000-sample floor for a published p99, as ADR-0018 says
+    - the JSON report and the Markdown table, with every setting ADR-0018 lists
+    - the command line: `--url`, `--api-key-env` (the variable's name, never the key), `--rate`,
+      `--duration-seconds`, `--warmup-seconds`, `--max-connections`, `--scenario`, `--limiter`,
+      `--tokens-per-minute`, `--capacity-tokens`, `--routes-file` (only its SHA-256 is recorded),
+      `--upstream-delay-ms`, `--server` (`uvicorn` or `compose`), a required `--same-machine` or
+      `--separate-machine`, and `--output`
+  - `tests/test_bench_report.py`.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Latency and lag come from the right timestamps: a request handed over 5 ms late that takes 10 ms counts as
+     a latency of 15 ms and a lag of 5 ms. Warm-up requests are counted apart and left out of every statistic.
+  2. Percentiles are pinned on a known sample. The p99 is published at 10,000 measured requests and replaced by
+     "too few samples" at 9,999.
+  3. A lag p99 of exactly 10% of the latency p99 is valid, and one just above it is invalid. Validity is
+     computed at 9,999 samples too. Any non-200 or transport error makes the run invalid, and errors are
+     counted by status.
+  4. The report holds every setting ADR-0018 lists, including the body's size and SHA-256 and the routes
+     file's SHA-256. A marker placed in the key appears in no output, and the routes file's content does not
+     appear either.
+  5. A tiny in-process run (20 requests against `create_app()` through `httpx.ASGITransport`, on the fake
+     clock) produces a report that passes the shape checks.
+- **Verification:** `python scripts/check.py` green; mutation table: latency measured from the hand-over time
+  instead of the due time; warm-up included; `inclusive` changed to `exclusive`; 9,999 samples accepted for a
+  p99; validity skipped below the floor; `<=` changed to `<` in the lag check; a non-200 left out of the
+  validity check; the key or the routes file's content written to the report. Then `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-407-load-report`; `feat(bench): report a load run with its settings`,
+  `docs(tasks): complete T-407`.
+- **Size:** about 450 lines, most of it tests. Above the ~400-line plan threshold; the owner approves the size
+  with this card.
+
+### T-408 - Cache scan and embedding latency benchmarks
+
+- **Status:** todo
+- **Goal:** the owner can measure the cache scan's cost by partition size and dimension, and the embedding
+  call's latency against a local Ollama.
+- **Context:** ADR-0015, ADR-0018, `app/cache/semantic.py`, `app/cache/ollama_embedder.py`,
+  `scripts/eval_cache.py` (`fetch_ollama_version`), `scripts/bench_load.py` (its report helpers, reused where
+  they fit).
+- **Depends on:** T-407.
+- **Deliverables:**
+  - `scripts/bench_cache.py` with two modes:
+    - `scan`, with `--entries`, `--dimensions`, `--repeats`, `--seed` and `--max-vector-bytes`
+    - `embed`, with `--url`, `--model` and `--calls`
+  - A JSON and Markdown report with the settings, as ADR-0018 says.
+  - `tests/test_bench_cache.py`.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. `scan` fills exactly N entries in one partition (`len` of the cache is N), and every timed lookup is a
+     `Miss`. A companion lookup with a threshold below every similarity is a `Hit` whose similarity equals the
+     maximum over all N entries, computed independently in the test. That shows the scan reaches every entry.
+  2. The vectors are unit vectors and the same for a given seed; their first values are pinned.
+  3. With an injected timer, the reported minimum and median per lookup are exact.
+  4. A combination whose vectors would exceed `--max-vector-bytes` is skipped and reported as skipped. At exactly
+     the limit it runs.
+  5. `embed`, through `httpx.MockTransport`: the first call is discarded, the next N are timed, and the Ollama
+     version is recorded with `fetch_ollama_version`. An `EmbeddingError` stops the run with a fixed message and
+     reports no figure.
+  6. A tiny run (N of 10, D of 8) completes in CI.
+- **Verification:** `python scripts/check.py` green; mutation table: a threshold that lets entries hit; each
+  entry in its own partition (killed by criterion 1's companion lookup); the scan stopped early; the discarded
+  first call kept; minimum and median swapped; the memory guard off by one; an `EmbeddingError` swallowed. Then
+  `gh pr checks <n> --watch`.
+- **Branch and commits:** `feat/t-408-cache-bench`; `feat(bench): measure the cache scan and the embedding
+  call`, `docs(tasks): complete T-408`.
+- **Size:** about 400 lines, most of it tests.
+
+### T-409 - The owner's benchmark runs and the operations guide
+
+- **Status:** todo
+- **Goal:** the figures the docs publish come from the owner's recorded runs, and the owner can run, scrape and
+  read the gateway from the docs alone.
+- **Context:** ADR-0005, ADR-0016, ADR-0017, ADR-0018, `docs/setup.md`, `scripts/bench_load.py`,
+  `scripts/bench_cache.py`, `scripts/fake_upstream.py`, `deploy/bench/`, `compose.yaml`.
+- **Depends on:** T-405, T-407, T-408.
+- **Deliverables:**
+  - OWNER-CHECK: the owner runs ADR-0018's scenarios A, B and C (B and C with each limiter), the ramp, the
+    cache scan and, with a local Ollama, the embedding latency. `docs/benchmarks.md` gets the tables and the
+    settings, and the JSON reports go under `docs/benchmarks/`. Invalid runs are reported as invalid. The Log
+    records a summary. A scenario the owner does not run is marked "not run" with the owner's reason.
+  - OWNER-CHECK (optional): the Compose stack started on the owner's machine, recorded in the Log or marked
+    "not run".
+  - `docs/setup.md` gains:
+    - running with Docker Compose: the variables, `.env` kept uncommitted, and the Ollama profile
+    - "Metrics": the token, a Prometheus scrape job with `authorization.credentials_file`, the metric list and
+      ADR-0016's series-count formula
+    - "Logs": `deploy/logging.json`, the fields, what is never logged, and that tracebacks need uvicorn's text
+      format
+    - running the benchmarks: the fake upstream, the route files, the limiter settings that leave room for the
+      rate, and the lag check on Windows
+    - one process per container, and the memory backend's N-times capacity
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. OWNER-CHECK: each scenario is recorded with its settings, or the owner waives it in writing.
+  2. Every figure in `docs/benchmarks.md` matches a committed JSON report, and each report says where the
+     generator ran and on which platform.
+  3. The gateway's added latency is shown as B minus A at each percentile, per repeat.
+  4. A search finds no key, token or real secret in any committed file.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table, and the
+  report says so. `gh pr checks <n> --watch`.
+- **Branch and commits:** `docs/t-409-benchmarks`; `docs(benchmarks): record the owner's benchmark runs`,
+  `docs(setup): add the operations guide`, `docs(tasks): complete T-409`.
+- **Size:** about 250 lines plus the JSON reports.
+
 ## Later phases (broken into tasks at each gate)
 
 | Phase | Epic |
@@ -1505,13 +1993,13 @@ delivery order; the cards further down are listed by ID.
 | 1 | Token-aware rate limiting: planned 2026-11-12 as T-101 to T-108 (see the current phase) |
 | 2 | Model routing: planned 2026-11-13 as T-201 to T-207; T-208, T-209 and T-210 added 2026-11-14 (see the current phase) |
 | 3 | Semantic caching: planned 2026-11-21 as T-301 to T-307 (see the current phase) |
-| 4 | Docker Compose, observability, reproducible load benchmarks |
+| 4 | Operations: Docker Compose, observability, reproducible load benchmarks: planned 2026-11-23 as T-401 to T-409 (see the current phase) |
 | 5 | Demo and write-up |
 
 ### Requirements that carry into the task cards
 
 These are written into the cards when each phase is planned. The two Phase 1 items are in ADR-0006, T-106 and
-T-107. The Phase 3 item is in ADR-0014, T-304 and T-307.
+T-107. The Phase 3 item is in ADR-0014, T-304 and T-307. The Phase 4 item is in ADR-0017, T-405 and T-409.
 
 - **Phase 1, Redis ADR first.** Before the Phase 1 ADR on how the rate limiter talks to Redis, the researcher
   checks, with sources, that every package the Redis and Lua tests would need has a prebuilt wheel for Windows
@@ -1536,7 +2024,8 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 - **Dependabot for GitHub Actions SHA pins:** the workflow pins its actions by commit SHA, which is updated by
   hand today. A Dependabot configuration for the `github-actions` ecosystem would propose those updates as pull
   requests. It adds a configuration file to the repository, so it is a task of its own, with a check that the
-  proposed updates keep the version comment next to each SHA.
+  proposed updates keep the version comment next to each SHA. Since ADR-0017 it also covers the `docker`
+  ecosystem: the base image digest in the `Dockerfile`, and the image tags in `compose.yaml` and `ci.yml`.
 - **Same-target retries, cooldowns and a request deadline:** retrying a target with backoff and honouring
   `Retry-After`, a cooldown that skips a target after repeated failures, measured on the injected clock, and a
   total deadline per request across all targets (deferred by ADR-0010 and ADR-0011).
@@ -1569,6 +2058,16 @@ Not scheduled. Each item becomes a task card when a phase is planned.
   limit while the reservation succeeds (ADR-0014).
 - **More embedders:** a prompt-prefix setting for models that need one (`nomic-embed-text`,
   `mxbai-embed-large`), and an embedder for the OpenAI-compatible `/v1/embeddings` (ADR-0015).
+- **Request id:** a response header carrying an id that the request log also holds, so one request can be
+  traced across systems. Changes the contract (ADR-0016).
+- **Cache size metric:** a gauge of the entries the cache holds, read from `len()` of the
+  `InMemorySemanticCache` at each scrape (ADR-0016).
+- **`prometheus_client`:** move the metrics to `prometheus_client` with a registry per app if the hand-written
+  registry outgrows its tests. Metric names stay the same (ADR-0016).
+- **Image publishing:** publish the image to the GitHub Container Registry on pushes to `main`, decided with
+  the Phase 5 demo (ADR-0017).
+- **TLS in front of the gateway:** an example reverse-proxy configuration for a host reachable from outside
+  (ADR-0017).
 
 ## Log
 
@@ -1637,3 +2136,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-22 | T-306 | Done. `app/api/chat.py`: after an allowed reservation, with `app.state.cache` set, the route looks the request up under `caller.caller_id`. A `Hit` runs no target, settles once with an actual amount of 0 and answers the stored response through `model_copy` with a new `id` from `app.state.id_source` and `created = int(clock.now_seconds())` (the providers' rule), `x-tollgate-provider` set to the stored provider and `x-tollgate-fallbacks: 0`. A `Miss` runs the route; after the settle its 200 is offered to `store` through a `partial` bound to the ticket, so a settle error stores nothing. A `Skip` or the cache off runs the route. `set_success_headers` writes the limit, routing and cache headers on the two 200 returns only, so the cache header never enters the shared limit-header dict that the 429 and 502 use. The route reads the cache, the id source and the clock from `app.state` on every request. The OpenAPI 200 gains `x-tollgate-cache` (`string`, enum `hit`, `miss`, `skip`), and the descriptions of `x-tollgate-provider` and `x-tollgate-fallbacks` say what they mean on a hit; the snapshot was regenerated in the route commit (13 lines added, 2 changed). `app/cache/semantic.py` adds the `SemanticCache` Protocol (`lookup`, `store`), which ADR-0014 makes final; `app/main.py` assigns the cache through a local typed `SemanticCache \| None`, so mypy checks that `InMemorySemanticCache` satisfies it. `tests/fakes.py`: `ScriptedProvider` gains `finish_reason` (default `stop`, owner decision). `docs/ARCHITECTURE.md`: section 2 shows a hit settling 0 and the cache row; section 3 replaces the illustrative `get`/`put` with the final `Embedder`, `EmbeddingError`, `Hit`, `Miss`, `Skip` and `SemanticCache`; section 5 describes `app/cache/`, the embedder and cache on `app.state`, and the cache in the chat-route paragraph; by the owner's decision the status line ("no caching yet") and the owned-clients sentence (missing the embedder client from T-302) were also corrected. Behaviour the card leaves open: the header stays `miss` when `store` refuses an answer (ADR-0014's definition), and an exception from the lookup other than an `EmbeddingError` is a 500 that stays charged as reserved, like a limiter error. Known gaps: the three unchanged chat test files do not themselves assert `skip`; that is asserted in the new file over the cache-off paths; the mutant that drops the type annotation on the cache in `create_app()` is equivalent at run time and mypy accepts it, so the Protocol check there is a static guard only. The contract changes as the card allows; no new dependency. About 690 hand-written changed lines (production 131, tests 486, docs 71) plus the snapshot diff, within the about 650 to 750 the owner approved at plan time | `python scripts/check.py` green (2069 passed, 45 deselected; ruff, format, mypy and contract clean); the route commit passes the check on its own. `git diff main` is empty for `tests/test_chat_rate_limits.py`, `tests/test_chat_routing.py` and `tests/test_chat_completions.py`. New tests: `tests/test_chat_cache.py`, 16 tests (25 cases): the cache off says `skip` after a fallback, on the built-in mock route and on an Ollama route that never calls `/api/embed`; a miss served by the second target after a timeout, then a hit 42.5 seconds later with the next id, `created` 1042, provider `second`, fallbacks 0 and each provider called once; a hit's exact reserve and settle-0 calls with the balance checked by a follow-up (952, where settling the usage gives 915 and keeping the reservation 941); a 429 for a cached prompt, a 404 and a 400 with no embedding; a `length` answer and a 502 storing nothing; an `EmbeddingError` giving `skip` with nothing stored, then a miss and a hit naming `first`; the header absent on 400, 401, 404, 429 and 502 with the cache on and off; another caller getting a miss; the whole app with the Ollama embedder and one `MockTransport` serving a miss then a hit (two embed calls with `truncate: false`, one chat call, the app's id source and clock); an ineligible request giving `skip` with no embedding; a `RuntimeError` from the embedder being a 500 with no settle and no provider call; a settle error after a miss storing nothing. `tests/test_chat_openapi.py`: the exact 200 header set gains `x-tollgate-cache`; the enum and both new descriptions are pinned. Mutation run, one at a time with a 120-second timeout, on a scratch copy: 44 mutants (every one on the card plus extras, two of them named by the review); 43 killed, 0 timeouts. "Stored after a 502" has no typed form (a failed route carries no answer) and was run as a fabricated answer stored in the 502 branch, killed; the survivor is the dropped annotation above, equivalent. Review APPROVE with six Minor findings, all fixed: two missed mutants (the provider from the route's last target, a lookup error swallowed as a skip) now killed, a stale docstring sentence, the Protocol check, the 65,536-byte cap in ARCHITECTURE, and a helper name. Files: `app/api/chat.py`, `app/cache/semantic.py`, `app/main.py`, `tests/test_chat_cache.py`, `tests/fakes.py`, `tests/test_chat_openapi.py`, `tests/contract/openapi.json`, `docs/ARCHITECTURE.md` |
 | 2026-11-23 | T-307 | Done. The eval run against a local Ollama is recorded in `docs/cache-eval.md` (new section `all-minilm`), run at the owner's instruction ("go ahead and pull and run") on the owner's machine. Settings: Ollama 0.40.17, model `all-minilm:latest` (ID `1b226e2802db`), Python 3.13.2, Windows 11, 2026-11-23, dataset SHA-256 `73aa98d6...9e1f` (40 same, 40 different pairs). The first attempt failed with an embedding timeout while the model loaded; the second ran clean. Result: no threshold below 1.00 has zero wrong hits (0.99: 2/40 same hits, 4/40 wrong hits; 0.98: 4/40 and 4/40; `negation` pairs hit through 0.88, `changed_number` and `swapped_order` through 0.78), so the run recommends none. `docs/setup.md` gains a "Semantic cache" section: the variables, the statement that no threshold is recommended and why, the `x-tollgate-cache` values, what a hit costs (reservation first, settle 0, one embedding call per eligible request), the limits, that a threshold of `1` may never hit, and that each process has its own cache; a stale sentence ("no request uses it yet") was corrected. The optional second model (`bge-m3`) and the optional gateway run with a `miss` then a `hit` were not run. The contract is unchanged; no dependency, no test added. About 140 changed lines of docs, against about 120 on the card | `python scripts/check.py` green (2069 passed, 45 deselected; ruff, format, mypy and contract clean). No mutation table: no test was added. A search of `docs/setup.md` and `docs/cache-eval.md` for key-like strings found nothing. OWNER-CHECK (criterion 1): the run is recorded; the owner confirms it with the approval of this PR. Files: `docs/cache-eval.md`, `docs/setup.md`, `docs/TASKS.md` |
 | 2026-11-23 | - | Phase 3 gate signed off by the owner: all nine open gate items met (the ADR item was ticked earlier, on 2026-11-21). T-301 to T-307 are `done` on the board, the last being T-307 (pull request #51, merge commit `535ff46`). The README, the ARCHITECTURE status line and this phase's heading and gate were updated in the close-out pull request: Phase 3 complete, T-301 to T-307 done, the cache described as optional and off by default, ADR-0014 and ADR-0015 listed, and the one recorded eval run reported as it is: `all-minilm` found no threshold without wrong hits, so no threshold is recommended anywhere, and the run is one model on 80 pairs chosen and measured on the same data. Evidence read back the same day, read-only: `ci` run `45194691428` succeeded on `main` at `535ff46` (job `lint and test`); `python scripts/check.py` passed locally on that tree (14 contract tests, 2069 other tests, 45 deselected); the cache tests are in `tests/test_semantic_cache.py` (lookup, partition, expiry, eviction), `tests/test_chat_cache.py` (lookup only after the reservation, so a 429, 404 and 400 never reach the embedder; a hit reserves once and settles 0 once; an embedder failure is a `skip` that is still served; a `length` answer and a 502 store nothing; the header absent on every status but 200) and `tests/test_chat_openapi.py` (the header in the snapshot); the Ollama embedder is tested through `httpx.MockTransport` in `tests/test_ollama_embedder.py` and the app's client close in `tests/test_app_cache.py` and `tests/test_app_wiring.py`; the harness runs the whole dataset on the hashing baseline in `tests/test_cache_evaluation.py` on every CI run; a search of `tests/`, `app/` and `scripts/` for `socket`, `urllib`, `requests` and `aiohttp` imports found none, and `requirements*.txt` name no embedding or provider package; the embedding model was called only by hand, once, outside the tests and CI (T-307, run at the owner's instruction); every Phase 3 card's Log row records a mutation table, and each survivor is explained (T-301 one equivalent, T-302 one killed by a new test and one equivalent, T-303 and T-305 all killed in a later round, T-304 one unreachable, T-306 one equivalent, T-307 added no test); 238 commits on `main`, all with the owner's author email and none with a co-author trailer or attribution line in its message. Phase 4 is not planned yet | `gh run view`, `python scripts/check.py`, `git log`, `grep` over `tests/`, `app/`, `scripts/`, `requirements*.txt` and `docs/TASKS.md` (all read-only) |
+| 2026-11-23 | - | Phase 4 planned: cards T-401 to T-409, the Phase 4 gate and board rows, and five backlog items (a request id, a cache size metric, `prometheus_client`, image publishing, TLS in front of the gateway), with the Dependabot item extended to Docker. Proposed: ADR-0016 (a JSON request log and Prometheus metrics with the standard library, labels and fields from bounded sets only, `/metrics` behind its own token, a monotonic clock; amends ADR-0013 and ADR-0014), ADR-0017 (a digest-pinned non-root image, a Compose stack, a CI `container` job and its localhost exception; the deployment target is one host running that stack; amends ADR-0006) and ADR-0018 (an open-loop load generator measuring from each request's due time, a fake upstream, a validity check, recorded runs only). No dependency is added. Checked on this date, with nothing installed: `prometheus_client`, the OpenTelemetry SDK and exporter, structlog, python-json-logger, the Prometheus text format and naming practice, FastAPI's native telemetry, uvicorn's logging and signal handling, the `python` and `redis` images and their licences, the Compose specification, GitHub's runner image, hadolint, hosted free tiers, k6, Locust, vegeta, oha and wrk2, and the Envoy, Kong and LiteLLM benchmark methods | `docs/DECISIONS.md`; the planning pull request |
