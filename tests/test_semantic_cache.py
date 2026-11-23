@@ -214,7 +214,7 @@ def test_a_request_not_ending_with_a_user_message_skips_without_embedding(last_r
             "messages": [{"role": "user", "content": "q"}, {"role": last_role, "content": "q"}],
         }
     )
-    assert isinstance(run(cache.lookup(CALLER, request)), Skip)
+    assert run(cache.lookup(CALLER, request)) == Skip("not_eligible")
     assert embedder.calls == []
 
 
@@ -463,8 +463,20 @@ def test_a_hit_returns_the_stored_bytes_not_a_later_change_to_the_model() -> Non
 def test_an_embedding_error_gives_a_skip() -> None:
     cache, _, embedder = make_cache({})
     embedder.error = EmbeddingError("timeout", None)
-    assert isinstance(look(cache, "q"), Skip)
+    assert look(cache, "q") == Skip("embedder_failed")
     assert embedder.calls == ["q"]
+
+
+def test_each_skip_reason_is_distinct_and_a_lookup_that_embeds_never_skips_as_not_eligible() -> (
+    None
+):
+    assert Skip("not_eligible") != Skip("embedder_failed")
+    assert Skip("embedder_failed").reason == "embedder_failed"
+    cache, _, embedder = make_cache({})
+    embedder.error = EmbeddingError("timeout", None)
+    skipped = look(cache, "q")
+    assert isinstance(skipped, Skip)
+    assert skipped.reason != "not_eligible"
 
 
 def test_any_other_embedder_exception_propagates() -> None:
