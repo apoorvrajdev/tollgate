@@ -98,7 +98,7 @@ so a threshold set without the embedder cannot leave the cache silently off. Set
 never takes a default. The embedder URL is not checked for syntax at startup, only that it is not blank
 (a malformed one that the HTTP client rejects stops startup naming the variable, never showing the value).
 With the cache on, the app builds the embedder on its own HTTP client (5-second connect timeout, 10 seconds for
-reads, writes and the pool), which it closes at shutdown; no request uses it yet.
+reads, writes and the pool), which it closes at shutdown; the chat route uses it (see "Semantic cache").
 
 ### Route table
 
@@ -255,6 +255,55 @@ Start the server through the app factory, with the variables set in your shell:
 TOLLGATE_API_KEYS="<your keys>" TOLLGATE_TOKENS_PER_MINUTE=60000 \
   uvicorn --factory app.main:create_app
 ```
+
+## Semantic cache
+
+The cache is off until `TOLLGATE_CACHE_EMBEDDER=ollama` is set. It needs a running Ollama with an embedding model
+pulled (`ollama pull all-minilm`), and these variables, described in the table under Configuration:
+`TOLLGATE_CACHE_EMBEDDER`, `TOLLGATE_CACHE_EMBEDDER_MODEL` and `TOLLGATE_CACHE_SIMILARITY_THRESHOLD` are required
+together; `TOLLGATE_CACHE_EMBEDDER_URL`, `TOLLGATE_CACHE_TTL_SECONDS` and `TOLLGATE_CACHE_MAX_ENTRIES` are optional.
+
+```bash
+TOLLGATE_API_KEYS="<your keys>" TOLLGATE_TOKENS_PER_MINUTE=60000 \
+TOLLGATE_CACHE_EMBEDDER=ollama TOLLGATE_CACHE_EMBEDDER_MODEL=<model> \
+TOLLGATE_CACHE_SIMILARITY_THRESHOLD=<threshold> \
+  uvicorn --factory app.main:create_app
+```
+
+**Threshold: none is recommended.** The only semantic run recorded so far is `all-minilm` on 2026-11-23
+([cache-eval.md](cache-eval.md)), and it found no threshold below 1 with zero wrong hits on the eval dataset: even
+at 0.99, 4 of 40 different-meaning pairs hit, while only 2 of 40 same-meaning pairs do. So this guide gives no value
+to copy. Any threshold you set is your own choice, and for `all-minilm` it will return wrong answers for questions
+whose meaning differs by a negation, a number or the order of words. To get a recommendation for another model,
+run `scripts/eval_cache.py --embedder ollama --model <model>` and read its last line. A threshold of `1` may never
+hit: normalised vectors of identical text can score just under 1 (`0.9999999999999999`).
+
+**The `x-tollgate-cache` header.** Every 200 carries it, and no other status does:
+
+| Value | Meaning |
+| --- | --- |
+| `hit` | A stored answer was returned and no provider was called |
+| `miss` | The request was looked up, nothing matched, and a provider answered (the answer may not be stored, see below) |
+| `skip` | The request was not looked up: the cache is off, the last message is not from the `user`, or the embedder failed |
+
+**What a hit costs.** The reservation is made first, as for any request, so a request that does not fit the bucket
+gets a 429 even when its answer is cached. A hit then settles at 0 tokens and refunds the whole reservation. A
+hit's `id` and `created` are new, `usage` describes the answer as it was first produced, and `x-tollgate-provider`
+names the provider that produced it, not one that served this request. Every eligible request, hit or miss, makes
+one embedding call to Ollama before any provider call, so a slow or stopped Ollama adds latency (up to the
+10-second read timeout) or turns the request into a `skip`.
+
+**Limits.**
+
+- Entries are shared only by the same API key, the same `model` and the same other request fields and earlier
+  messages. Only the last `user` message is compared by meaning.
+- Only a 200 with one choice, finish reason `stop` and a JSON body of at most 65,536 bytes is stored.
+- An entry lives `TOLLGATE_CACHE_TTL_SECONDS` (default 3600) from when it was stored; a hit does not extend it. At
+  most `TOLLGATE_CACHE_MAX_ENTRIES` (default 1000) are kept, and the least recently used goes first. Both defaults
+  are chosen, not measured.
+- Each process has its own cache, held in memory. Several workers or instances do not share entries, and a restart
+  empties it.
+- There is no way yet to bypass or purge the cache per request.
 
 ## Regenerating the OpenAPI snapshot
 
