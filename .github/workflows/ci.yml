@@ -121,7 +121,7 @@ jobs:
           test "$uid" != "0"
       - name: image app directory holds only the expected files
         run: |
-          test "$(docker compose exec -T gateway ls -A /app | sort | tr '\n' ' ')" = ".venv app deploy "
+          test "$(docker compose exec -T gateway ls -A /app | LC_ALL=C sort | tr '\n' ' ')" = ".venv app deploy "
           test "$(docker compose exec -T gateway ls -A /app/deploy)" = "logging.json"
       - name: graceful shutdown
         run: |

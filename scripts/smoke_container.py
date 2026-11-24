@@ -29,6 +29,7 @@ LIMIT_HEADERS = (
 )
 
 Headers = Mapping[str, str]
+Check = Callable[[int, Headers, str], str | None]
 
 
 def check_health(status: int, headers: Headers, body: str) -> str | None:
@@ -87,7 +88,7 @@ def _lower(items: Iterable[tuple[str, str]]) -> dict[str, str]:
 
 def run(base_url: str, api_key: str, metrics_token: str) -> list[str]:
     """Send the five requests in order and return one failure message per failed check."""
-    plan: list[tuple[str, str, dict[str, object] | None, str | None, Callable[..., str | None]]] = [
+    plan: list[tuple[str, str, dict[str, object] | None, str | None, Check]] = [
         ("GET /health", "/health", None, None, check_health),
         ("chat with key", CHAT_PATH, CHAT_BODY, api_key, check_chat_ok),
         ("chat without key", CHAT_PATH, CHAT_BODY, None, check_unauthorized),
