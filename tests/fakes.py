@@ -1,11 +1,26 @@
 """Test doubles shared across tests."""
 
+import importlib.util
 from array import array
 from collections.abc import Callable, Mapping
+from pathlib import Path
+from types import ModuleType
 from typing import Literal
 
 from app.api.models import ChatRequest, ChatResponse, Choice, ResponseMessage, Usage
 from app.settings import Settings
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_script(name: str) -> ModuleType:
+    """Load scripts/<name>.py as a module; scripts/ is not a package."""
+    spec = importlib.util.spec_from_file_location(f"{name}_script", ROOT / "scripts" / f"{name}.py")
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class FakeClock:
