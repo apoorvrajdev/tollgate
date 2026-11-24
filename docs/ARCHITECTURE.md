@@ -160,6 +160,7 @@ deliberate.
 | `tests/` | Unit, integration and contract tests; no network access | yes |
 | `scripts/` | Cross-platform helper scripts, such as `check.py` and `eval_cache.py` (the cache eval run) | yes |
 | `eval/` | Fixed datasets for measurements: `cache_pairs.json`, the cache eval pairs | yes |
+| `deploy/` | Deployment files: `logging.json`, the `uvicorn --log-config` file | yes |
 | `docs/` | Architecture, decisions, tasks, setup | yes |
 | `.githooks/` | Commit guards (identity, message, blocked files); need Node.js | yes |
 | `.github/workflows/` | CI | yes |
@@ -185,7 +186,8 @@ semantic cache: `embedder.py` (the `Embedder` protocol and `EmbeddingError`), `o
 baseline for tests and the eval, never selectable at run time), `semantic.py` (`SemanticCache`, `Hit`, `Miss`,
 `Skip`, `Ticket`, `partition_key` and `InMemorySemanticCache`: partitions, a `math.sumprod` scan, expiry and
 eviction) and `evaluation.py`, the eval harness that measures hit and wrong-hit rates on
-`eval/cache_pairs.json` (`docs/cache-eval.md`).
+`eval/cache_pairs.json` (`docs/cache-eval.md`). `app/observability/` holds the request log (ADR-0016):
+`record.py`, `middleware.py` and `logs.py`, described below.
 The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
@@ -228,7 +230,7 @@ Every 200, and no other status, carries `x-tollgate-cache`: `hit`, `miss` or `sk
 `run_route` tries each target once, in order, with the request's `model` replaced by the target's upstream
 model (the client's when it has none), and moves on only after a retryable `ProviderError`. It times
 each call on the monotonic clock and returns an `Attempt` for every call, whatever its outcome; nothing
-logs or counts them yet (T-402 and later). A 200 settles
+the request log (below) reports them. A 200 settles
 once with the serving attempt's `usage.total_tokens`, capped at the bucket capacity (`charged_tokens` with the
 reserve decision's `limit_tokens`, ADR-0012) while the response's `usage` is returned unchanged, keeps the body
 `model` the provider reported, and carries `x-tollgate-provider` and `x-tollgate-fallbacks`. A route that ends without an answer gives the
@@ -236,6 +238,25 @@ ADR-0008 502: the whole reservation is refunded, except after a `bad_response`, 
 reserved (ADR-0010). Only the provider calls are guarded, so a limiter error is a 500, never a refund.
 The limit headers come from the `Decision` that `reserve` returned, so a 200 shows the balance after the
 reservation and a 502 the balance before the settle; the next request sees the settled balance.
+
+Every HTTP request writes one JSON line to the logger `tollgate.request` (ADR-0016). The chat route creates a
+`ChatRecord` (`app/observability/record.py`) in the ASGI scope's `state`, so the record belongs to one request,
+and fills it as each step runs: the serving provider and the fallbacks, the cache result and the skip reason,
+the reserved and charged tokens, whether the settle was capped (the reported total was above the capacity),
+the attempts and the cache lookup's duration. A field stays `None` until its step has run, so a 404 or a 429
+has null chat fields, a cache hit has no attempts, a 502 has no serving provider, and a cache that is off has
+no cache result. `RequestMiddleware` (`middleware.py`) is a pure ASGI middleware, added by `create_app()`. It
+times the request on the monotonic clock, reads the status from `http.response.start`, and reports once the
+app has returned, so the duration includes sending the body. A handler that raises is reported once, with
+the status already sent or 500, and the exception propagates; a cancelled request is not logged. It maps the path to `/v1/chat/completions`,
+`/health` or `/metrics` exactly, and everything else, FastAPI's documentation routes included, to `other`.
+The result goes to its observers, `log_request` first; T-404 adds the metrics. `JsonFormatter` (`logs.py`)
+writes the ADR-0016 fields for `tollgate.request`, and only `time`, `level`, `logger`, `message` and
+`exception_type` for any other logger, never an exception's message or traceback. It uses `ensure_ascii`,
+so a line is one ASCII line. The app installs no handler: `deploy/logging.json` is the `dictConfig` file for
+`uvicorn --log-config`. It sends `tollgate.request` and uvicorn's loggers to stdout through `JsonFormatter`,
+and silences `uvicorn.access`, whose message holds the path, the query string and the client address.
+`create_app()` also turns FastAPI's native telemetry off (`NATIVE_TELEMETRY_OFF` in `app/main.py`).
 
 The Redis token bucket keeps one hash per API key at a prefix plus the SHA-256 digest of the key
 (default prefix `tollgate:bucket:`), so the key itself is never written to Redis. The hash holds
