@@ -306,6 +306,179 @@ one embedding call to Ollama before any provider call, so a slow or stopped Olla
   empties it.
 - There is no way yet to bypass or purge the cache per request.
 
+## Running with Docker Compose
+
+`compose.yaml` runs the gateway and Redis on one host (ADR-0017). The gateway uses the Redis limiter, listens on
+`127.0.0.1:8000` only, and routes to the mock provider through `deploy/routes.compose.json`, so the stack needs no
+provider key and no outside network.
+
+```bash
+TOLLGATE_API_KEYS="<your keys>" TOLLGATE_METRICS_TOKEN="<a token of 32 or more characters>" \
+  docker compose up --wait
+curl localhost:8000/health   # {"status":"ok"}
+docker compose down
+```
+
+- `TOLLGATE_API_KEYS` and `TOLLGATE_METRICS_TOKEN` are required, and Compose stops with a message when either is
+  missing. `TOLLGATE_TOKENS_PER_MINUTE` is optional and defaults to 60000 here.
+- Instead of putting them on the command line, write them in a `.env` file next to `compose.yaml`. `.env*` files
+  are git-ignored and never enter the image (`.dockerignore`). Keep it that way: never commit one.
+- `compose.yaml` passes only the variables above to the gateway, plus the fixed backend, Redis URL and routes
+  file. To turn on the semantic cache or change the capacity, add the variable to the `gateway` service's
+  `environment` first.
+- The Ollama service is off by default. `docker compose --profile ollama up --wait` starts it, and
+  `docker compose exec ollama ollama pull all-minilm` pulls a model into the `ollama-models` volume. The image is
+  about 3.4 GB compressed. Nothing uses it until you change two things:
+  - To route chat requests to it, copy `deploy/routes.compose.json` outside the repository, add an `ollama`
+    provider with `"base_url": "http://ollama:11434"`, make it a target of `default` or of a route (a provider alone
+    receives no traffic), and mount your copy over `/config/routes.json` in `compose.yaml` instead of the tracked file.
+  - To use it for the semantic cache, add `TOLLGATE_CACHE_EMBEDDER=ollama`, `TOLLGATE_CACHE_EMBEDDER_MODEL`,
+    `TOLLGATE_CACHE_SIMILARITY_THRESHOLD` and `TOLLGATE_CACHE_EMBEDDER_URL=http://ollama:11434` to the `gateway`
+    service's `environment`. Without the URL, the gateway looks for Ollama on its own `localhost`, which is the
+    container itself.
+- CI's `container` job starts this stack and sends smoke requests. It has not been run on the owner's machine:
+  [benchmarks.md](benchmarks.md) records it as not run.
+
+### One process per container
+
+The image runs one uvicorn worker per container (ADR-0017). Each process has its own metrics and its own
+semantic cache, and a restart empties both. More than one gateway container works only with
+`TOLLGATE_LIMITER_BACKEND=redis`, which keeps one bucket per key in Redis for all of them. With the `memory`
+backend, N processes would each hold their own bucket and together allow N times the capacity.
+The gateway does not serve TLS; on a host reachable from outside, put a reverse proxy in front of it.
+
+## Metrics
+
+`GET /metrics` exists only when `TOLLGATE_METRICS_TOKEN` is set; unset, it is a 404 like any unknown path. The
+token must be at least 32 characters and differ from every API key. A scrape needs `Authorization: Bearer
+<token>`, and an API key never opens it. Any other request gets a 401 with the code `invalid_metrics_token`.
+
+```bash
+curl -H "Authorization: Bearer $TOLLGATE_METRICS_TOKEN" localhost:8000/metrics
+```
+
+A Prometheus scrape job reads the token from a file, so it never sits in the configuration:
+
+```yaml
+scrape_configs:
+  - job_name: tollgate
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/tollgate_token
+    static_configs:
+      - targets: ["tollgate:8000"]
+```
+
+That target resolves for a Prometheus on the same Compose network. The stack publishes the port on
+`127.0.0.1:8000` only, so a Prometheus running on the host uses `localhost:8000`.
+
+The text format is Prometheus 0.0.4. Every label value comes from a set fixed by the code or the route table,
+never from a request. These are the metrics (ADR-0016):
+
+| Metric | Labels | What it counts |
+| --- | --- | --- |
+| `tollgate_http_requests_total` | `path`, `status` | HTTP requests answered |
+| `tollgate_http_request_duration_seconds` (histogram) | `path` | Request duration |
+| `tollgate_chat_completions_total` | `provider`, `cache` | Chat completions answered with 200; `cache` is `hit`, `miss`, `skip` or `off` |
+| `tollgate_provider_attempts_total` | `provider`, `outcome` | Provider calls; `outcome` is `ok`, `connection`, `timeout`, `rate_limited`, `upstream_status`, `bad_response`, `reply_too_large` or `error` |
+| `tollgate_provider_attempt_duration_seconds` (histogram) | `provider` | Provider call duration |
+| `tollgate_cache_lookups_total` | `result` | `hit`, `miss`, `not_eligible` or `embedder_failed` |
+| `tollgate_cache_lookup_duration_seconds` (histogram) | none | Semantic cache lookup duration |
+| `tollgate_tokens_reserved_total` | none | Tokens reserved from the rate limiter |
+| `tollgate_tokens_charged_total` | none | Tokens charged after a call |
+| `tollgate_settle_capped_total` | none | Settles where the charge was capped at the capacity |
+
+`path` is `/v1/chat/completions`, `/health`, `/metrics` or `other` (every other path). Histogram buckets, in
+seconds, are 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60 and `+Inf`; they were
+chosen to span a mock call and a slow provider call, not measured.
+
+**Series count.** With P providers in the route table and R distinct (`path`, `status`) pairs seen so far, one
+process exports `97 + 30 P + R` series: each histogram series set has 18 series (16 buckets, `_sum`, `_count`),
+and the fixed counts are 72 for the request duration (four paths), 18 for the cache lookup duration, 4 for the
+lookups and 3 for the counters with no label (tokens reserved, tokens charged, settle capped), plus `18 P` for the attempt duration, `8 P` for the attempts and `4 P`
+for the chat completions. R is at most four paths times the statuses the app can answer. With one provider and
+no request yet, that is 127 series (R is 0).
+
+## Logs
+
+Run uvicorn with `--log-config deploy/logging.json` (the image does, with `--no-access-log`) and the gateway
+writes one JSON object per line to stdout: one record per HTTP request, on the logger `tollgate.request`, plus
+uvicorn's own messages.
+
+| Field | Present | Meaning |
+| --- | --- | --- |
+| `time`, `level`, `logger` | always | UTC time in ISO 8601, level and logger name |
+| `event`, `method`, `path`, `status`, `duration_seconds` | request records | `event` is `http_request`; `path` is as for the metrics |
+| `provider`, `fallbacks`, `cache`, `skip_reason`, `reserved_tokens`, `charged_tokens`, `settle_capped`, `attempts` | chat requests that reached the route handler | The serving provider (or null), the cache result, the tokens, and one entry per provider tried with its outcome and duration |
+| `message` | records from other loggers | uvicorn's and libraries' text |
+| `exception_type` | records from other loggers that carry an exception | The exception's class name only |
+
+**Never logged:** the prompt, the messages, the model, the API key or its digest, the caller, a header value, the
+query string and the client address. For an exception the log carries the class name (`exception_type`) and
+neither its message nor its traceback, because an exception text can echo provider internals or a prompt. To
+debug an exception, run uvicorn without `--log-config`: its text format prints tracebacks. There is no request id,
+so one request cannot be followed across systems. The record is written after the response is sent, so a crash
+between the two loses it.
+
+## Running the benchmarks
+
+The load benchmarks are ADR-0018's. Every figure published in [benchmarks.md](benchmarks.md) comes from a run
+recorded by `scripts/bench_load.py`, with its settings, in `docs/benchmarks/`. The generator sends requests at a
+fixed rate and measures each one from the moment it was due, so a slow answer is not hidden by the requests that
+waited behind it.
+
+1. **The fake upstream** (scenarios A and B). In its own terminal:
+   `python scripts/fake_upstream.py --delay-ms 50`. It listens on `127.0.0.1:8100` and answers one OpenAI-shaped
+   chat completion after the delay. Nothing in the gateway can select it.
+2. **The route files.** `deploy/bench/routes.fake-upstream.json` sends every request through the `openai`
+   adapter to `http://127.0.0.1:8100` (scenario B). It reads the upstream key from the variable named in its
+   `api_key_env`, `TOLLGATE_BENCH_UPSTREAM_KEY`; set it to any non-empty value, since the fake upstream checks
+   nothing. `deploy/bench/routes.mock.json` uses the mock provider (scenario C). Scenario A has no gateway.
+3. **The limiter settings.** A benchmark request ("ping", `max_tokens` 16) reserves 23 tokens and is charged 10
+   (scenario B) or 4 (scenario C) after the call. The bucket must never refuse a request, so set
+   `TOLLGATE_TOKENS_PER_MINUTE` and `TOLLGATE_CAPACITY_TOKENS` to at least twice the reserved tokens per minute
+   at the rate you test: `2 * 23 * 60 * rate`, which is `2760 * rate` (110400 at 40 requests per second). Pass the
+   same two numbers to `bench_load.py`, which records them.
+4. **The gateway,** in a third terminal, with `TOLLGATE_LIMITER_BACKEND` set to `memory` or `redis` (and
+   `TOLLGATE_REDIS_URL` for `redis`):
+   ```bash
+   TOLLGATE_API_KEYS="<a key>" TOLLGATE_BENCH_UPSTREAM_KEY="<anything>" \
+   TOLLGATE_ROUTES_FILE=deploy/bench/routes.fake-upstream.json \
+   TOLLGATE_TOKENS_PER_MINUTE=110400 TOLLGATE_CAPACITY_TOKENS=110400 \
+   TOLLGATE_LIMITER_BACKEND=memory \
+     uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8001 --no-access-log
+   ```
+   With the `redis` backend the bucket lives in Redis under the API key, so a new key gives a run a full bucket. Reusing
+   a key continues from whatever balance the last run left. (`FLUSHDB` also resets it, but only run that on a Redis
+   dedicated to benchmarks.)
+5. **The run.** The key goes in the environment and only its variable's name on the command line:
+   ```bash
+   BENCH_GATEWAY_KEY="<the same key>" python scripts/bench_load.py \
+     --url http://127.0.0.1:8001 --api-key-env BENCH_GATEWAY_KEY --rate 40 \
+     --duration-seconds 250 --warmup-seconds 10 --scenario B --limiter memory \
+     --tokens-per-minute 110400 --capacity-tokens 110400 \
+     --routes-file deploy/bench/routes.fake-upstream.json --upstream-delay-ms 50 \
+     --server uvicorn --same-machine --output docs/benchmarks/B-memory-r40-rep1.json
+   ```
+   For scenario A, point `--url` at `http://127.0.0.1:8100` and leave out the key, limiter and route options. The
+   exit code is 0 for a valid run, 3 for an invalid one and 1 when no report was written.
+6. **The length.** A p99 is published only from at least 10,000 measured requests, so the rate times
+   `--duration-seconds` must reach 10,000, and the measurement must last at least 60 seconds. Repeat each run 3
+   times. The latency the gateway adds is B minus A at each percentile, per repeat.
+7. **The rate.** Choose it below the knee. A short ramp of separate runs at rising rates shows where the achieved
+   rate stops following the target and the number of requests in flight keeps growing.
+
+**The lag check, and Windows.** A run is valid only if every response was a 200, no transport error occurred,
+and the lag p99 (the time from a request's due moment to the moment the generator hands it over) is at most 10%
+of the latency p99. On Windows the lag p99 of all 15 runs recorded for this repository was 14 to 16 ms
+([benchmarks.md](benchmarks.md)). That is consistent with the default Windows timer tick of about 15.6 ms, though the
+tick was not measured. Such a floor fails the check whenever the latency p99 is under about 150 ms. The report
+then says it is invalid, and the run is not tuned until it passes. For a valid run, run the generator itself on Linux
+or WSL2: moving only the server does not change the generator's timer, and the Compose stack has only the mock
+provider with Redis, so it can serve scenario C and not B. A generator and a gateway on one machine also compete for
+the CPU, so the report states whether they shared one.
+
 ## Regenerating the OpenAPI snapshot
 
 `tests/contract/openapi.json` is the committed OpenAPI document (ADR-0005). `tests/test_openapi_snapshot.py`
