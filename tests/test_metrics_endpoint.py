@@ -38,9 +38,9 @@ def get(gateway: LogGateway, *values: str) -> Any:
     return anonymous(gateway).get("/metrics", headers=headers)
 
 
-def raw_status(headers: list[tuple[bytes, bytes]]) -> tuple[int, bytes]:
+def raw_status(headers: list[tuple[bytes, bytes]], token: str = TOKEN) -> tuple[int, bytes]:
     """GET /metrics with exactly these raw headers; return the status and the body."""
-    application = create_app(make_settings(**TOKEN_ENV), FakeClock())
+    application = create_app(make_settings(TOLLGATE_METRICS_TOKEN=token), FakeClock())
     scope: Scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -210,3 +210,23 @@ def test_a_tab_next_to_the_token_is_not_stripped_but_spaces_are() -> None:
     assert raw_status([(b"authorization", b"Bearer \t" + token)])[0] == 401
     assert raw_status([(b"authorization", b"Bearer " + token + b"\t")])[0] == 401
     assert raw_status([(b"authorization", b"Bearer " + token + b"  ")])[0] == 200
+
+
+def test_a_non_breaking_space_next_to_the_token_is_not_trimmed() -> None:
+    nbsp = b"\xc2\xa0"
+    token = TOKEN.encode()
+    assert raw_status([(b"authorization", b"Bearer " + nbsp + token)])[0] == 401
+    assert raw_status([(b"authorization", b"Bearer " + token + nbsp)])[0] == 401
+
+
+@pytest.mark.parametrize("scheme", [b"Bearerx", b"Bearers", b"Bearer2", b"xBearer", b"Bear"])
+def test_a_scheme_that_only_resembles_bearer_gets_the_401(scheme: bytes) -> None:
+    assert raw_status([(b"authorization", scheme + b" " + TOKEN.encode())])[0] == 401
+
+
+def test_a_non_ascii_token_is_compared_as_utf8() -> None:
+    token = "\u00e9" * 32
+    right = b"Bearer " + token.encode("utf-8")
+    assert raw_status([(b"authorization", right)], token)[0] == 200
+    mojibake = b"Bearer " + token.encode("utf-8").decode("latin-1").encode("utf-8")
+    assert raw_status([(b"authorization", mojibake)], token)[0] == 401
