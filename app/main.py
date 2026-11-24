@@ -20,8 +20,10 @@ from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
 from app.limits.memory import InMemoryRateLimiter
 from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
+from app.observability.endpoint import register_metrics_route
 from app.observability.logs import log_request
 from app.observability.middleware import RequestMiddleware
+from app.observability.request_metrics import build_request_metrics
 from app.providers.anthropic import DEFAULT_BASE_URL as ANTHROPIC_DEFAULT_BASE_URL
 from app.providers.anthropic import AnthropicProvider
 from app.providers.base import Provider
@@ -278,6 +280,9 @@ def create_app(
 
     `RequestMiddleware` writes one JSON line per request to the logger `tollgate.request`
     (ADR-0016). The app installs no handler; `deploy/logging.json` does, for uvicorn.
+
+    The middleware's second observer feeds a `MetricsRegistry` built here, one per app, kept on
+    `app.state.metrics`. `GET /metrics` is registered only when `settings.metrics_token` is set.
     """
     application = TollgateApp(title="Tollgate", lifespan=_lifespan, telemetry=NATIVE_TELEMETRY_OFF)
     application.state.owned_clients = []
@@ -329,8 +334,17 @@ def create_app(
     application.state.owned_clients.extend(limiter_build.built_clients)
     register_error_handlers(application)
     register_auth_error_handler(application)
-    application.add_middleware(RequestMiddleware, observers=(log_request,))
+    request_metrics = build_request_metrics(
+        tuple(resolved_settings.route_table.providers),
+        metrics_path=resolved_settings.metrics_token is not None,
+    )
+    application.state.metrics = request_metrics.registry
+    application.add_middleware(RequestMiddleware, observers=(log_request, request_metrics.observe))
     application.include_router(chat.router)
+    if resolved_settings.metrics_token is not None:
+        register_metrics_route(
+            application, resolved_settings.metrics_token, request_metrics.registry
+        )
 
     @application.get("/health", response_model=HealthResponse, status_code=200)
     def health() -> HealthResponse:

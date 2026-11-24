@@ -153,14 +153,16 @@ class LogGateway:
         raise_server_exceptions: bool = True,
         table: dict[str, Any] | None = None,
         providers: dict[str, Any] | None = None,
+        extra_env: dict[str, str] | None = None,
+        monotonic: FakeMonotonicClock | None = None,
     ) -> None:
         path = tmp_path / "routes.json"
         path.write_text(json.dumps(table or ROUTE_TABLE), encoding="utf-8")
-        env = {**LIMIT_SETTINGS, "TOLLGATE_ROUTES_FILE": str(path)}
+        env = {**LIMIT_SETTINGS, "TOLLGATE_ROUTES_FILE": str(path), **(extra_env or {})}
         if cache:
             env.update(CACHE_ENV)
         self.clock = FakeClock(START_SECONDS)
-        self.monotonic = FakeMonotonicClock()
+        self.monotonic = monotonic or FakeMonotonicClock()
         scripted: dict[str, Any] = providers or {
             "first": ScriptedProvider(
                 "first",
