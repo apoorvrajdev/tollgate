@@ -5,6 +5,7 @@ from typing import Any, Literal, NamedTuple, Protocol, assert_never
 
 import httpx
 from fastapi import FastAPI
+from fastapi.telemetry import TelemetryConfig
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
@@ -19,6 +20,8 @@ from app.limits.estimate import HeuristicEstimator
 from app.limits.limiter import RateLimiter
 from app.limits.memory import InMemoryRateLimiter
 from app.limits.redis_limiter import MAX_TOKENS, RedisRateLimiter
+from app.observability.logs import log_request
+from app.observability.middleware import RequestMiddleware
 from app.providers.anthropic import DEFAULT_BASE_URL as ANTHROPIC_DEFAULT_BASE_URL
 from app.providers.anthropic import AnthropicProvider
 from app.providers.base import Provider
@@ -52,6 +55,16 @@ CONNECT_TIMEOUT_SECONDS = MIN_TIMEOUT_SECONDS
 # The embedder's timeouts are fixed too (ADR-0015): 5 seconds to connect, 10 for the rest.
 EMBEDDER_CONNECT_TIMEOUT_SECONDS = 5
 EMBEDDER_TIMEOUT_SECONDS = 10
+# FastAPI's own spans, metrics and logs stay off, so an OpenTelemetry SDK installed later starts no
+# second, unreviewed set of them (ADR-0016). `auto_configure` is set explicitly because its default
+# reads an environment variable.
+NATIVE_TELEMETRY_OFF: TelemetryConfig = {
+    "tracing": False,
+    "metrics": False,
+    "logs": False,
+    "operation_spans": False,
+    "auto_configure": False,
+}
 
 
 class AsyncCloseable(Protocol):
@@ -261,9 +274,12 @@ def create_app(
     The cache is an `InMemorySemanticCache` on that embedder and the clock, kept on
     `app.state.cache` (None when the cache is off). One `UuidIdSource`, on `app.state.id_source`,
     serves every provider. A `MonotonicClock` (`monotonic_clock`, else a `SystemMonotonicClock`),
-    on `app.state.monotonic_clock`, times each provider call.
+    on `app.state.monotonic_clock`, times each provider call and each HTTP request.
+
+    `RequestMiddleware` writes one JSON line per request to the logger `tollgate.request`
+    (ADR-0016). The app installs no handler; `deploy/logging.json` does, for uvicorn.
     """
-    application = TollgateApp(title="Tollgate", lifespan=_lifespan)
+    application = TollgateApp(title="Tollgate", lifespan=_lifespan, telemetry=NATIVE_TELEMETRY_OFF)
     application.state.owned_clients = []
     resolved_settings = settings if settings is not None else Settings.from_env(os.environ)
     resolved_clock = clock if clock is not None else SystemClock()
@@ -313,6 +329,7 @@ def create_app(
     application.state.owned_clients.extend(limiter_build.built_clients)
     register_error_handlers(application)
     register_auth_error_handler(application)
+    application.add_middleware(RequestMiddleware, observers=(log_request,))
     application.include_router(chat.router)
 
     @application.get("/health", response_model=HealthResponse, status_code=200)

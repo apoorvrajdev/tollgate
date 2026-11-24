@@ -31,11 +31,17 @@ The limit headers come from the Decision that `reserve` returned, so a 200 shows
 the reservation (made from the estimate) and a 502 shows the balance before the settle; the next
 request sees the settled balance (owner decision, T-108). A 400 is rejected before any reservation
 and carries no limit headers.
+
+The route fills a `ChatRecord` on the request (ADR-0016) as each step runs, and the request
+middleware logs it. A field the request never reached stays `None`: a 429 has no reserved tokens, a
+cache hit has no attempts, and a route that ended without an answer has no serving provider.
+`charged_tokens` and `settle_capped` are set only after the settle returned, so a limiter error
+leaves them `None`.
 """
 
 from collections.abc import Callable, Mapping
 from functools import partial
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -49,6 +55,7 @@ from app.clock import Clock, MonotonicClock
 from app.limits.charge import charged_tokens
 from app.limits.estimate import TokenEstimator, reserved_tokens
 from app.limits.limiter import Decision, RateLimiter
+from app.observability.record import begin_chat_record
 from app.providers.base import Provider
 from app.providers.ids import IdSource
 from app.routing.router import RouteFailed, Router, UnknownModelError, run_route
@@ -63,9 +70,9 @@ MODEL_NOT_FOUND_MESSAGE = "The requested model is not available on this gateway.
 PROVIDER_HEADER = "x-tollgate-provider"
 FALLBACKS_HEADER = "x-tollgate-fallbacks"
 CACHE_HEADER = "x-tollgate-cache"
-CACHE_HIT = "hit"
-CACHE_MISS = "miss"
-CACHE_SKIP = "skip"
+CACHE_HIT: Final = "hit"
+CACHE_MISS: Final = "miss"
+CACHE_SKIP: Final = "skip"
 
 ROUTING_HEADERS_OPENAPI: dict[str, dict[str, Any]] = {
     PROVIDER_HEADER: {
@@ -210,7 +217,9 @@ async def create_chat_completion(
     id_source: Annotated[IdSource, Depends(get_id_source)],
     clock: Annotated[Clock, Depends(get_clock)],
     monotonic_clock: Annotated[MonotonicClock, Depends(get_monotonic_clock)],
+    request: Request,
 ) -> ChatResponse | JSONResponse:
+    record = begin_chat_record(request)
     try:
         route = route_selector.select(body)
     except UnknownModelError:
@@ -233,26 +242,43 @@ async def create_chat_completion(
             code=RATE_LIMIT_ERROR_CODE,
         )
         return error_response(429, refusal, headers)
+    record.reserved_tokens = requested_tokens
     cache_status = CACHE_SKIP
     store_answer: Callable[[ChatResponse, str], bool] | None = None
     if cache is not None:
         # An EmbeddingError is already a Skip; any other exception is a bug, a 500 that stays
         # charged as reserved, like a limiter error (ADR-0014).
+        lookup_started_seconds = monotonic_clock.monotonic_seconds()
         looked_up = await cache.lookup(key, body)
+        record.lookup_duration_seconds = (
+            monotonic_clock.monotonic_seconds() - lookup_started_seconds
+        )
         if isinstance(looked_up, Hit):
+            record.cache = CACHE_HIT
+            record.provider = looked_up.provider_name
+            record.fallbacks = 0
             await limiter.settle(key, requested_tokens, 0)
+            record.charged_tokens = 0
+            record.settle_capped = False
             set_success_headers(response, headers, looked_up.provider_name, 0, CACHE_HIT)
             fresh = {"id": id_source.next_id(), "created": int(clock.now_seconds())}
             return looked_up.response.model_copy(update=fresh)
         if isinstance(looked_up, Miss):
+            record.cache = CACHE_MISS
             cache_status = CACHE_MISS
             store_answer = partial(cache.store, looked_up.ticket)
+        else:
+            record.cache = CACHE_SKIP
+            record.skip_reason = looked_up.reason
     # run_route guards only the provider calls, so a limiter error is never refunded, and the
     # exception text is never sent, because it can hold provider internals.
     outcome = await run_route(route, providers, body, monotonic_clock=monotonic_clock)
+    record.attempts = outcome.attempts
     if isinstance(outcome, RouteFailed):
         actual_tokens = requested_tokens if outcome.charged else 0
         await limiter.settle(key, requested_tokens, actual_tokens)
+        record.charged_tokens = actual_tokens
+        record.settle_capped = False
         failure = ErrorBody(
             message=PROVIDER_ERROR_MESSAGE,
             type=PROVIDER_ERROR_TYPE,
@@ -260,8 +286,13 @@ async def create_chat_completion(
             code=PROVIDER_ERROR_CODE,
         )
         return error_response(502, failure, headers)
-    settled_tokens = charged_tokens(outcome.completion.usage.total_tokens, decision.limit_tokens)
+    record.provider = outcome.provider_name
+    record.fallbacks = outcome.fallbacks
+    reported_tokens = outcome.completion.usage.total_tokens
+    settled_tokens = charged_tokens(reported_tokens, decision.limit_tokens)
     await limiter.settle(key, requested_tokens, settled_tokens)
+    record.charged_tokens = settled_tokens
+    record.settle_capped = reported_tokens > decision.limit_tokens
     if store_answer is not None:  # after the settle, so a settle error stores nothing
         store_answer(outcome.completion, outcome.provider_name)
     set_success_headers(response, headers, outcome.provider_name, outcome.fallbacks, cache_status)
