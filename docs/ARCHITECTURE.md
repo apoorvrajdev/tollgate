@@ -158,9 +158,9 @@ deliberate.
 | --- | --- | --- |
 | `app/` | Gateway code | yes |
 | `tests/` | Unit, integration and contract tests; no network access | yes |
-| `scripts/` | Cross-platform helper scripts, such as `check.py` and `eval_cache.py` (the cache eval run) | yes |
+| `scripts/` | Cross-platform helper scripts, such as `check.py`, `eval_cache.py` (the cache eval run), `fake_upstream.py` (a fake OpenAI-compatible upstream with a fixed delay) and `bench_load.py` (the fixed-rate load runner, ADR-0018) | yes |
 | `eval/` | Fixed datasets for measurements: `cache_pairs.json`, the cache eval pairs | yes |
-| `deploy/` | Deployment files: `logging.json` (the `uvicorn --log-config` file) and `routes.compose.json` (the Compose route table, mock provider only) | yes |
+| `deploy/` | Deployment files: `logging.json` (the `uvicorn --log-config` file), `routes.compose.json` (the Compose route table, mock provider only) and `bench/` (the load benchmark's route tables: `routes.fake-upstream.json` for scenario B, `routes.mock.json` for scenario C) | yes |
 | `Dockerfile`, `.dockerignore`, `compose.yaml` | The gateway image and the one-host stack (section 5.1) | yes |
 | `docs/` | Architecture, decisions, tasks, setup | yes |
 | `.githooks/` | Commit guards (identity, message, blocked files); need Node.js | yes |
