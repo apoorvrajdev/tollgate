@@ -1,0 +1,11 @@
+{
+  "providers": {
+    "fake-upstream": {
+      "type": "openai",
+      "base_url": "http://127.0.0.1:8100",
+      "api_key_env": "TOLLGATE_BENCH_UPSTREAM_KEY"
+    }
+  },
+  "routes": {},
+  "default": [{"provider": "fake-upstream"}]
+}
