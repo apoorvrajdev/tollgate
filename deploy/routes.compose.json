@@ -1,0 +1,7 @@
+{
+  "providers": {
+    "mock": {"type": "mock"}
+  },
+  "routes": {},
+  "default": [{"provider": "mock"}]
+}
