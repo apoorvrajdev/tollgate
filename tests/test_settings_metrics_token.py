@@ -81,7 +81,7 @@ def test_errors_never_show_the_token_or_a_key() -> None:
         error = error_for(token, **extra)
         shown = f"{error!s} {error!r} {error.args}"
         assert token not in shown
-        assert key not in shown or token == ""
+        assert key not in shown
 
 
 def test_the_token_is_a_secretstr_and_hidden_in_repr() -> None:
