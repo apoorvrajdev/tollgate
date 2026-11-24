@@ -33,6 +33,13 @@ def test_live_openapi_matches_snapshot() -> None:
     )
 
 
+def test_live_openapi_matches_snapshot_with_the_metrics_token_set() -> None:
+    settings = make_settings(TOLLGATE_METRICS_TOKEN="s" * 32)
+    application = create_app(settings, FakeClock())
+    assert "/metrics" in {getattr(route, "path", None) for route in application.routes}
+    assert not differs(load_snapshot(), application.openapi()), REGENERATE_HINT
+
+
 def is_canonical(text: str) -> bool:
     """True for sorted keys, indent 2, LF line endings and a final newline."""
     canonical = json.dumps(json.loads(text), indent=2, sort_keys=True, ensure_ascii=False)

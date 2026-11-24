@@ -64,14 +64,14 @@ class CallerIdentity:
     caller_id: str
 
 
-def _digest(text: str) -> bytes:
+def digest_of(text: str) -> bytes:
     # surrogatepass never raises and is injective, so two different strings cannot share bytes.
     return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).digest()
 
 
 class ApiKeyAuthenticator:
     def __init__(self, keys: Sequence[SecretStr]) -> None:
-        self._digests = tuple(_digest(key.get_secret_value()) for key in keys)
+        self._digests = tuple(digest_of(key.get_secret_value()) for key in keys)
 
     def authenticate(self, authorization_values: Sequence[str]) -> CallerIdentity:
         """Check the Authorization header values of a request. Raises InvalidApiKeyError."""
@@ -89,7 +89,7 @@ class ApiKeyAuthenticator:
         token = rest.strip(" ")
         if not token:
             raise InvalidApiKeyError
-        submitted = _digest(token)
+        submitted = digest_of(token)
         # Every configured digest is compared, with no early exit, so the time taken does not
         # show which key matched. Comparing fixed-length digests hides the submitted key's length.
         matched = False

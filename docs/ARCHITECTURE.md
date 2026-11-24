@@ -229,8 +229,8 @@ or an `EmbeddingError`) runs the route as if the cache were off; any other excep
 Every 200, and no other status, carries `x-tollgate-cache`: `hit`, `miss` or `skip`.
 `run_route` tries each target once, in order, with the request's `model` replaced by the target's upstream
 model (the client's when it has none), and moves on only after a retryable `ProviderError`. It times
-each call on the monotonic clock and returns an `Attempt` for every call, whatever its outcome; nothing
-the request log (below) reports them. A 200 settles
+each call on the monotonic clock and returns an `Attempt` for every call, whatever its outcome; the
+request log and the metrics (below) report them. A 200 settles
 once with the serving attempt's `usage.total_tokens`, capped at the bucket capacity (`charged_tokens` with the
 reserve decision's `limit_tokens`, ADR-0012) while the response's `usage` is returned unchanged, keeps the body
 `model` the provider reported, and carries `x-tollgate-provider` and `x-tollgate-fallbacks`. A route that ends without an answer gives the
@@ -250,13 +250,27 @@ times the request on the monotonic clock, reads the status from `http.response.s
 app has returned, so the duration includes sending the body. A handler that raises is reported once, with
 the status already sent or 500, and the exception propagates; a cancelled request is not logged. It maps the path to `/v1/chat/completions`,
 `/health` or `/metrics` exactly, and everything else, FastAPI's documentation routes included, to `other`.
-The result goes to its observers, `log_request` first; T-404 adds the metrics. `JsonFormatter` (`logs.py`)
+The result goes to its observers, `log_request` first and the metrics second. `JsonFormatter` (`logs.py`)
 writes the ADR-0016 fields for `tollgate.request`, and only `time`, `level`, `logger`, `message` and
 `exception_type` for any other logger, never an exception's message or traceback. It uses `ensure_ascii`,
 so a line is one ASCII line. The app installs no handler: `deploy/logging.json` is the `dictConfig` file for
 `uvicorn --log-config`. It sends `tollgate.request` and uvicorn's loggers to stdout through `JsonFormatter`,
 and silences `uvicorn.access`, whose message holds the path, the query string and the client address.
 `create_app()` also turns FastAPI's native telemetry off (`NATIVE_TELEMETRY_OFF` in `app/main.py`).
+
+The metrics (ADR-0016) live in one `MetricsRegistry` per app, on `app.state.metrics`, built by
+`build_request_metrics` (`app/observability/request_metrics.py`) from the route table's provider names; it is
+never a module-level object. Its `observe` is the middleware's second observer and reads only the request
+result: the path and status feed the request counter and duration histogram, a 200 with a serving provider
+feeds `tollgate_chat_completions_total` (`off` when no lookup ran), each attempt feeds the attempt counter and
+histogram, a lookup feeds `tollgate_cache_lookups_total` by its result or skip reason, and the reserved and
+charged tokens (the charge already capped) and a capped settle feed the three token counters. Label sets known
+at startup are exported at 0; `status` is the one label that appears on first use. No label is `method`, which
+the log carries as received. `GET /metrics` (`app/observability/endpoint.py`) is registered only when
+`TOLLGATE_METRICS_TOKEN` is set, is left out of the OpenAPI document, and answers with the registry's text
+format. It accepts exactly one `Authorization: Bearer <token>` and compares SHA-256 digests with
+`hmac.compare_digest`; anything else is a 401 with code `invalid_metrics_token`. A scrape is counted after it is
+rendered, so it never shows itself. With the token unset, `/metrics` is an ordinary 404 and counts as `other`.
 
 The Redis token bucket keeps one hash per API key at a prefix plus the SHA-256 digest of the key
 (default prefix `tollgate:bucket:`), so the key itself is never written to Redis. The hash holds
