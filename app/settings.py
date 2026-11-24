@@ -18,6 +18,8 @@ TOKENS_PER_MINUTE_VAR = "TOLLGATE_TOKENS_PER_MINUTE"
 CAPACITY_TOKENS_VAR = "TOLLGATE_CAPACITY_TOKENS"
 LIMITER_BACKEND_VAR = "TOLLGATE_LIMITER_BACKEND"
 REDIS_URL_VAR = "TOLLGATE_REDIS_URL"
+METRICS_TOKEN_VAR = "TOLLGATE_METRICS_TOKEN"
+MIN_METRICS_TOKEN_CHARACTERS = 32
 
 CACHE_EMBEDDER_VAR = "TOLLGATE_CACHE_EMBEDDER"
 CACHE_EMBEDDER_MODEL_VAR = "TOLLGATE_CACHE_EMBEDDER_MODEL"
@@ -79,6 +81,7 @@ class Settings:
     redis_url: SecretStr | None
     route_table: RouteTable
     cache: CacheSettings | None
+    metrics_token: SecretStr | None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -99,6 +102,7 @@ class Settings:
         except RouteTableError as error:
             raise SettingsError(error.variable, error.reason) from None
         cache = _parse_cache(environ)
+        metrics_token = _parse_metrics_token(environ.get(METRICS_TOKEN_VAR), api_keys)
         return cls(
             api_keys=api_keys,
             tokens_per_minute=tokens_per_minute,
@@ -107,6 +111,7 @@ class Settings:
             redis_url=redis_url,
             route_table=route_table,
             cache=cache,
+            metrics_token=metrics_token,
         )
 
 
@@ -117,6 +122,22 @@ def _parse_api_keys(raw: str | None) -> tuple[SecretStr, ...]:
     if any(not piece for piece in pieces):
         raise SettingsError(API_KEYS_VAR, "contains an empty key")
     return tuple(SecretStr(piece) for piece in pieces)
+
+
+def _parse_metrics_token(raw: str | None, api_keys: tuple[SecretStr, ...]) -> SecretStr | None:
+    """The token for /metrics (ADR-0016), or None when unset, which means no endpoint."""
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        raise SettingsError(METRICS_TOKEN_VAR, "must not be blank")
+    if len(text) < MIN_METRICS_TOKEN_CHARACTERS:
+        raise SettingsError(
+            METRICS_TOKEN_VAR, f"must be at least {MIN_METRICS_TOKEN_CHARACTERS} characters"
+        )
+    if any(text == key.get_secret_value() for key in api_keys):
+        raise SettingsError(METRICS_TOKEN_VAR, "must differ from every API key")
+    return SecretStr(text)
 
 
 def _parse_positive_int(variable: str, raw: str | None) -> int:

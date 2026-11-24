@@ -88,6 +88,7 @@ invalid. The error names the variable and the reason, never the value. API keys 
 | `TOLLGATE_CACHE_SIMILARITY_THRESHOLD` | Cosine similarity needed for a hit: `0.5` to `1`, at most 4 decimal places (`0.9`, `0.8750`, `1`, `1.0000`) | none | when the cache is on |
 | `TOLLGATE_CACHE_TTL_SECONDS` | How long an entry lives, a whole number from 60 to 604,800 | `3600` | no |
 | `TOLLGATE_CACHE_MAX_ENTRIES` | Most entries kept, a whole number from 1 to 100,000 | `1000` | no |
+| `TOLLGATE_METRICS_TOKEN` | Turns on `GET /metrics`, which needs `Authorization: Bearer <token>`; surrounding spaces are trimmed; at least 32 characters, not blank, and different from every API key; masked in `repr()`. The route is not in the OpenAPI document, and a scrape does not count itself | unset: no `/metrics` route (404) | no |
 
 Numbers are plain ASCII digits, at most 18: `1_000`, `1e3`, `1.5`, signs and spaces inside the number are
 rejected. `TOLLGATE_REDIS_URL` is ignored when the backend is `memory`.
