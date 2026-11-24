@@ -90,19 +90,28 @@ jobs:
           PY
       # hadolint/hadolint v2.15.1
       - name: hadolint
-        run: docker run --rm -i hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
+        run: |
+          docker run --rm -i hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
       - name: compose config
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
       - name: compose build
-        run: docker compose build
+        run: |
+          docker compose build
       - name: compose up
-        run: docker compose up --wait
+        run: |
+          docker compose up --wait
       - name: smoke requests
-        run: python3 scripts/smoke_container.py
+        run: |
+          python3 scripts/smoke_container.py
       - name: Redis holds a limiter bucket
-        run: docker compose exec -T redis redis-cli --scan --pattern 'tollgate:bucket:*' | grep -q .
+        run: |
+          keys="$(docker compose exec -T redis redis-cli --scan --pattern 'tollgate:bucket:*')"
+          test -n "$keys"
       - name: logs hold a JSON request line
-        run: docker compose logs --no-log-prefix gateway | grep -q '"event": "http_request"'
+        run: |
+          logs="$(docker compose logs --no-log-prefix gateway)"
+          grep -q '"event": "http_request"' <<< "$logs"
       - name: gateway runs as non-root
         run: |
           uid="$(docker compose exec -T gateway id -u)"
@@ -115,13 +124,16 @@ jobs:
       - name: graceful shutdown
         run: |
           docker compose stop gateway
-          docker compose logs --no-log-prefix gateway | grep -q 'Application shutdown complete.'
+          logs="$(docker compose logs --no-log-prefix gateway)"
+          grep -q 'Application shutdown complete.' <<< "$logs"
           code="$(docker compose ps -a --format '{{.ExitCode}}' gateway)"
           echo "gateway exit code: $code"
           test "$code" != "137"
       - name: compose logs on failure
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          docker compose logs --no-color
       - name: compose down
         if: always()
-        run: docker compose down --volumes
+        run: |
+          docker compose down --volumes
