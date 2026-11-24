@@ -98,7 +98,7 @@ def test_render_pins_the_exact_text_for_a_counter_and_a_histogram() -> None:
         "jobs_total", "Jobs done.", ("kind",), label_sets=[{"kind": "fast"}, {"kind": "slow"}]
     )
     seconds = registry.histogram(
-        "job_seconds", "Job time.", (0.5, 1.0, 2.5), ("kind",), [{"kind": "fast"}]
+        "job_seconds", "Job time.", (0.5, 1.0, 2.5), ("kind",), label_sets=[{"kind": "fast"}]
     )
     jobs.inc({"kind": "slow"}, 3)
     seconds.observe({"kind": "fast"}, 0.5)
@@ -229,7 +229,7 @@ def test_a_histogram_bound_is_written_as_a_float_even_when_given_an_int() -> Non
 
 
 def test_a_declared_histogram_set_renders_zero_in_every_series_before_any_use() -> None:
-    histogram = Histogram("h", "x", (0.5, 1.0), ("k",), [{"k": "b"}, {"k": "a"}])
+    histogram = Histogram("h", "x", (0.5, 1.0), ("k",), label_sets=[{"k": "b"}, {"k": "a"}])
     assert histogram.lines()[2:] == [
         'h_bucket{k="b",le="0.5"} 0',
         'h_bucket{k="b",le="1.0"} 0',
@@ -365,7 +365,7 @@ def test_a_counter_rejects_a_label_set_that_was_not_declared(labels: dict[str, A
 
 @pytest.mark.parametrize("labels", BAD_LABELS, ids=BAD_LABEL_IDS)
 def test_a_histogram_rejects_a_label_set_that_was_not_declared(labels: dict[str, Any]) -> None:
-    histogram = Histogram("h", "x", (1.0,), ("kind",), [{"kind": "fast"}])
+    histogram = Histogram("h", "x", (1.0,), ("kind",), label_sets=[{"kind": "fast"}])
     with pytest.raises(ValueError, match="label"):
         histogram.observe(labels, 0.5)
     assert histogram.lines()[-1] == 'h_count{kind="fast"} 0'
@@ -474,7 +474,7 @@ def test_an_invalid_label_name_is_rejected(name: str) -> None:
     with pytest.raises(ValueError, match="label name"):
         labelled(name)
     with pytest.raises(ValueError, match="label name"):
-        Histogram("h", "x", (1.0,), (name,), [{name: "v"}])
+        Histogram("h", "x", (1.0,), (name,), label_sets=[{name: "v"}])
 
 
 @pytest.mark.parametrize("name", ["__x", "__", "___a"])
@@ -486,7 +486,7 @@ def test_a_label_name_starting_with_two_underscores_is_rejected(name: str) -> No
 @pytest.mark.parametrize("name", ["__x", "__"])
 def test_a_histogram_label_name_starting_with_two_underscores_is_rejected(name: str) -> None:
     with pytest.raises(ValueError, match="reserved"):
-        Histogram("h", "x", (1.0,), (name,), [{name: "v"}])
+        Histogram("h", "x", (1.0,), (name,), label_sets=[{name: "v"}])
 
 
 def test_a_label_name_with_two_underscores_inside_or_one_at_the_start_is_accepted() -> None:
@@ -496,10 +496,10 @@ def test_a_label_name_with_two_underscores_inside_or_one_at_the_start_is_accepte
 
 def test_le_is_rejected_as_a_histogram_label_name_but_not_as_a_counter_one() -> None:
     with pytest.raises(ValueError, match="not allowed"):
-        Histogram("h", "x", (1.0,), ("le",), [{"le": "v"}])
+        Histogram("h", "x", (1.0,), ("le",), label_sets=[{"le": "v"}])
     labelled("le")
-    Histogram("h", "x", (1.0,), ("Le",), [{"Le": "v"}])
-    Histogram("h", "x", (1.0,), ("le_",), [{"le_": "v"}])
+    Histogram("h", "x", (1.0,), ("Le",), label_sets=[{"Le": "v"}])
+    Histogram("h", "x", (1.0,), ("le_",), label_sets=[{"le_": "v"}])
 
 
 def test_the_constructors_reject_a_bad_declaration() -> None:
@@ -541,13 +541,27 @@ def test_a_histogram_rejects_bad_bucket_bounds(buckets: Sequence[float]) -> None
         Histogram("h", "x", buckets)
 
 
+def test_label_sets_is_keyword_only_on_the_histogram_and_the_registry_like_the_counter() -> None:
+    sets = [{"k": "a"}]
+    with pytest.raises(TypeError):
+        Histogram("h", "x", (1.0,), ("k",), sets)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        MetricsRegistry().histogram("h", "x", (1.0,), ("k",), sets)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        Counter("m", "h", ("k",), sets)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        MetricsRegistry().counter("m", "h", ("k",), sets)  # type: ignore[call-arg]
+    Histogram("h", "x", (1.0,), ("k",), label_sets=sets)
+    MetricsRegistry().histogram("h", "x", (1.0,), ("k",), label_sets=sets)
+
+
 def test_a_histogram_label_set_declaration_follows_the_counter_rules() -> None:
     with pytest.raises(ValueError, match="declare"):
         Histogram("h", "x", (1.0,), ("k",))
     with pytest.raises(ValueError, match="no labels"):
-        Histogram("h", "x", (1.0,), (), [{}])
+        Histogram("h", "x", (1.0,), (), label_sets=[{}])
     with pytest.raises(ValueError, match="duplicate label set"):
-        Histogram("h", "x", (1.0,), ("k",), [{"k": "a"}, {"k": "a"}])
+        Histogram("h", "x", (1.0,), ("k",), label_sets=[{"k": "a"}, {"k": "a"}])
 
 
 @pytest.mark.parametrize(
@@ -584,7 +598,11 @@ def several_metrics() -> MetricsRegistry:
     )  # fmt: skip
     seconds = registry.histogram("a_seconds", "Plain histogram.", (0.5, 1.0))
     by_kind = registry.histogram(
-        "b_seconds", "By kind.", (0.25, 1.0, 5.0), ("kind",), [{"kind": "x"}, {"kind": QUOTE}]
+        "b_seconds",
+        "By kind.",
+        (0.25, 1.0, 5.0),
+        ("kind",),
+        label_sets=[{"kind": "x"}, {"kind": QUOTE}],
     )
     labelled_counter.inc({"k": "plain"}, 2)
     first_use.inc({"path": "/b", "status": "404"})

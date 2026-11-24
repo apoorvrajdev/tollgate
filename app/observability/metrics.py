@@ -230,6 +230,7 @@ class Histogram:
         help_text: str,
         buckets: Sequence[float],
         label_names: Sequence[str] = (),
+        *,
         label_sets: Sequence[Mapping[str, str]] | None = None,
     ) -> None:
         check_metric_name(name)
@@ -305,9 +306,10 @@ class MetricsRegistry:
         help_text: str,
         buckets: Sequence[float],
         label_names: Sequence[str] = (),
+        *,
         label_sets: Sequence[Mapping[str, str]] | None = None,
     ) -> Histogram:
-        metric = Histogram(name, help_text, buckets, label_names, label_sets)
+        metric = Histogram(name, help_text, buckets, label_names, label_sets=label_sets)
         self._register(metric)
         return metric
 
