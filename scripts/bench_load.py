@@ -478,7 +478,7 @@ def render_markdown(report: LoadReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-class _Parser(argparse.ArgumentParser):
+class Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         # argparse repeats the values it rejects, and any of them may be the URL put in the
         # wrong place, so no value is ever repeated.
@@ -489,7 +489,7 @@ class _Parser(argparse.ArgumentParser):
         super().error(message)
 
 
-def _positive_int(text: str) -> int:
+def positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
@@ -504,17 +504,17 @@ def _non_negative_int(text: str) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(description="Send load at a fixed arrival rate.", allow_abbrev=False)
+    parser = Parser(description="Send load at a fixed arrival rate.", allow_abbrev=False)
     parser.add_argument("--url", required=True, help="the base URL of the server under test")
     parser.add_argument("--api-key-env", help="the NAME of the variable that holds the key")
-    parser.add_argument("--rate", type=_positive_int, required=True, help="requests per second")
-    parser.add_argument("--duration-seconds", type=_positive_int, required=True)
+    parser.add_argument("--rate", type=positive_int, required=True, help="requests per second")
+    parser.add_argument("--duration-seconds", type=positive_int, required=True)
     parser.add_argument("--warmup-seconds", type=_non_negative_int, default=0)
-    parser.add_argument("--max-connections", type=_positive_int, help="default: no cap")
+    parser.add_argument("--max-connections", type=positive_int, help="default: no cap")
     parser.add_argument("--scenario", choices=["A", "B", "C"], required=True)
     parser.add_argument("--limiter", choices=["memory", "redis"])
-    parser.add_argument("--tokens-per-minute", type=_positive_int)
-    parser.add_argument("--capacity-tokens", type=_positive_int)
+    parser.add_argument("--tokens-per-minute", type=positive_int)
+    parser.add_argument("--capacity-tokens", type=positive_int)
     parser.add_argument("--routes-file", type=Path, help="only its SHA-256 is recorded")
     parser.add_argument("--upstream-delay-ms", type=_non_negative_int)
     parser.add_argument("--server", choices=["uvicorn", "compose"])
