@@ -81,12 +81,14 @@ jobs:
           persist-credentials: false
       - name: Make a random key and token
         run: |
-          python3 - >> "$GITHUB_ENV" <<'PY'
+          python3 - <<'PY'
+          import os
           import secrets
-          for name in ("TOLLGATE_API_KEYS", "TOLLGATE_METRICS_TOKEN"):
-              value = secrets.token_urlsafe(32)
-              print(f"::add-mask::{value}")
-              print(f"{name}={value}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              for name in ("TOLLGATE_API_KEYS", "TOLLGATE_METRICS_TOKEN"):
+                  value = secrets.token_urlsafe(32)
+                  print(f"::add-mask::{value}")
+                  env_file.write(f"{name}={value}\n")
           PY
       # hadolint/hadolint v2.15.1
       - name: hadolint
