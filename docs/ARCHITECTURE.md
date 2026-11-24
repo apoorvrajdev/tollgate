@@ -46,7 +46,7 @@ flowchart TB
 | Rate limiter | Per-key token bucket, state in Redis through redis-py and one Lua script (ADR-0006) | Phase 1 |
 | Router | Route table by model alias (ADR-0011); targets tried in order, each once, moving on only after a retryable failure (ADR-0010); a failed route is refunded, an untranslatable answer charged | Phase 2 |
 | Semantic cache | Looked up after the reservation under the caller id; embedding of the last user message, similarity lookup, thresholds and invalidation; a hit settles 0, and only a `stop` answer of at most 65,536 bytes after a miss is stored (ADR-0014, ADR-0015) | Phase 3 |
-| Operations | Docker Compose, metrics, structured logs, load benchmarks | Phase 4 |
+| Operations | A pinned non-root image, a Docker Compose stack (gateway and Redis, Ollama optional) checked in CI, metrics, structured logs, load benchmarks (ADR-0016, ADR-0017) | Phase 4 |
 
 ## 3. Core interfaces (target, Phase 1 onwards)
 
@@ -160,11 +160,28 @@ deliberate.
 | `tests/` | Unit, integration and contract tests; no network access | yes |
 | `scripts/` | Cross-platform helper scripts, such as `check.py` and `eval_cache.py` (the cache eval run) | yes |
 | `eval/` | Fixed datasets for measurements: `cache_pairs.json`, the cache eval pairs | yes |
-| `deploy/` | Deployment files: `logging.json`, the `uvicorn --log-config` file | yes |
+| `deploy/` | Deployment files: `logging.json` (the `uvicorn --log-config` file) and `routes.compose.json` (the Compose route table, mock provider only) | yes |
+| `Dockerfile`, `.dockerignore`, `compose.yaml` | The gateway image and the one-host stack (section 5.1) | yes |
 | `docs/` | Architecture, decisions, tasks, setup | yes |
 | `.githooks/` | Commit guards (identity, message, blocked files); need Node.js | yes |
 | `.github/workflows/` | CI | yes |
 | `.venv/` | Local virtual environment | no |
+
+### 5.1 Image and deployment target (ADR-0017)
+
+- **Image.** Multi-stage `Dockerfile` on `python:3.13-slim` pinned by digest. `/app` holds `.venv`, `app/` and
+  `deploy/logging.json` only; `.dockerignore` excludes everything except those inputs. It runs as uid 10001 and
+  starts uvicorn in exec form, so uvicorn is PID 1 and receives SIGTERM, with one worker.
+- **Compose stack.** `gateway` (Redis limiter, `/health` healthcheck, published on `127.0.0.1:8000` only) and
+  `redis` (`redis:7.4.12`, no published port). `TOLLGATE_API_KEYS` and `TOLLGATE_METRICS_TOKEN` are required
+  `${VAR:?...}` references, never written in the file. The route table is mounted read-only at
+  `/config/routes.json`, outside `/app`. An `ollama` service sits in the `ollama` profile, off by default.
+- **CI.** The `container` job lints the `Dockerfile` with hadolint, builds and starts the stack, runs
+  `scripts/smoke_container.py`, and checks Redis keys, the JSON log line, the non-root user, the contents of
+  `/app` and a graceful stop. Its key and token are random per run.
+- **Deployment target.** One host running this stack, one gateway process per container. More gateway
+  containers need `TOLLGATE_LIMITER_BACKEND=redis`; the cache and the metrics stay per process. The gateway
+  serves no TLS; a reverse proxy outside this repository terminates it. No hosted deployment in Phase 4.
 
 Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
 body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and

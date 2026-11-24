@@ -1,0 +1,47 @@
+# One-host deployment (ADR-0017). Start with:
+#   TOLLGATE_API_KEYS=<key> TOLLGATE_METRICS_TOKEN=<token> docker compose up --wait
+# or put both in an uncommitted .env. Neither value is ever written in this file.
+services:
+  gateway:
+    build: .
+    environment:
+      TOLLGATE_API_KEYS: ${TOLLGATE_API_KEYS:?set TOLLGATE_API_KEYS to a comma-separated list of API keys}
+      TOLLGATE_METRICS_TOKEN: ${TOLLGATE_METRICS_TOKEN:?set TOLLGATE_METRICS_TOKEN to the /metrics token}
+      TOLLGATE_TOKENS_PER_MINUTE: ${TOLLGATE_TOKENS_PER_MINUTE:-60000}
+      TOLLGATE_LIMITER_BACKEND: redis
+      TOLLGATE_REDIS_URL: redis://redis:6379/0
+      TOLLGATE_ROUTES_FILE: /config/routes.json
+    volumes:
+      - ./deploy/routes.compose.json:/config/routes.json:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.12
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Off by default: docker compose --profile ollama up. Point a route at http://ollama:11434 to use it.
+  ollama:
+    image: ollama/ollama:0.40.17
+    profiles: ["ollama"]
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama-models:

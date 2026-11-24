@@ -66,3 +66,76 @@ jobs:
         env:
           TOLLGATE_TEST_REDIS_URL: redis://localhost:6379/0
         run: python -m pytest -m redis_server
+
+  # Builds the image, starts the Compose stack and smoke-tests it (ADR-0017). Its key and token are
+  # random values made at run time; no secret is stored anywhere. Not part of the protect-main ruleset
+  # unless the owner adds it.
+  container:
+    name: container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Make a random key and token
+        run: |
+          python3 - <<'PY'
+          import os
+          import secrets
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              for name in ("TOLLGATE_API_KEYS", "TOLLGATE_METRICS_TOKEN"):
+                  value = secrets.token_urlsafe(32)
+                  print(f"::add-mask::{value}")
+                  env_file.write(f"{name}={value}\n")
+          PY
+      # hadolint/hadolint v2.15.1
+      - name: hadolint
+        run: |
+          docker run --rm -i hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
+      - name: compose config
+        run: |
+          docker compose config --quiet
+      - name: compose build
+        run: |
+          docker compose build
+      - name: compose up
+        run: |
+          docker compose up --wait
+      - name: smoke requests
+        run: |
+          python3 scripts/smoke_container.py
+      - name: Redis holds a limiter bucket
+        run: |
+          keys="$(docker compose exec -T redis redis-cli --scan --pattern 'tollgate:bucket:*')"
+          test -n "$keys"
+      - name: logs hold a JSON request line
+        run: |
+          logs="$(docker compose logs --no-log-prefix gateway)"
+          grep -q '"event": "http_request"' <<< "$logs"
+      - name: gateway runs as non-root
+        run: |
+          uid="$(docker compose exec -T gateway id -u)"
+          echo "uid=$uid"
+          test "$uid" != "0"
+      - name: image app directory holds only the expected files
+        run: |
+          test "$(docker compose exec -T gateway ls -A /app | LC_ALL=C sort | tr '\n' ' ')" = ".venv app deploy "
+          test "$(docker compose exec -T gateway ls -A /app/deploy)" = "logging.json"
+      - name: graceful shutdown
+        run: |
+          docker compose stop gateway
+          logs="$(docker compose logs --no-log-prefix gateway)"
+          grep -q 'Application shutdown complete.' <<< "$logs"
+          code="$(docker compose ps -a --format '{{.ExitCode}}' gateway)"
+          echo "gateway exit code: $code"
+          test "$code" != "137"
+      - name: compose logs on failure
+        if: failure()
+        run: |
+          docker compose logs --no-color
+      - name: compose down
+        if: always()
+        run: |
+          docker compose down --volumes

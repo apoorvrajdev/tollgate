@@ -1,0 +1,7 @@
+# Exclude everything, then list back only what the Dockerfile copies (ADR-0017).
+*
+!requirements.txt
+!app/
+!deploy/logging.json
+**/__pycache__
+**/*.pyc
