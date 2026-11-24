@@ -1732,6 +1732,9 @@ by ID.
     `invalid_metrics_token`.
   - `docs/setup.md` lists the variable. The full metrics guide is T-409.
   - ARCHITECTURE section 5 describes the registry and the endpoint.
+  - Carried from T-402: the request log writes `method` as the server received it, so it is unbounded. No
+    ADR-0016 metric labels by `method`, and none may until `method` is mapped to a fixed set (the standard
+    verbs, else `other`) first, because an unbounded label value makes the series count grow without limit.
 - **Contract:** unchanged. The route is left out of the OpenAPI document, and a test pins that.
 - **Acceptance criteria:**
   1. With the token unset, `/metrics` gets the app's ordinary 404.
