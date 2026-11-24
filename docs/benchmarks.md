@@ -13,7 +13,7 @@ rule and are measured runs.
 
 ## Platform and settings
 
-Recorded in every report, and the same in all 15 load runs:
+Recorded in every report, and the same in all 15 load runs except the limiter and route rows, which apply to B and C only (A has no gateway, and C's route file is not B's):
 
 | Setting | Value |
 | --- | --- |
@@ -41,7 +41,7 @@ tick itself was not measured here, so this is an explanation that fits the figur
 rule compares that fixed floor of about 15 ms with the latency p99, so it passes only when the latency p99 is above about
 150 ms. Scenario A, at about 82 ms (the median of its three p99s), fails it at 0.17 to 0.18, B at 0.11 to 0.17, and C, whose latency p99 is only
 26 to 39 ms, at 0.41 to 0.62. ADR-0018 anticipated this on Windows (it says runs there "may fail the lag check more often") and says to report the run as invalid, not to tune it.
-A valid run needs Linux, WSL2 or the Compose stack (not run, see below).
+A valid run needs the generator itself on Linux or WSL2; the Compose stack could only serve the gateway for scenario C (not run, see below).
 
 What the lag does to the latency figures is not known from these runs. The latency is measured from the due
 time, so a late hand-over counts in it, and every figure below may include up to one timer tick of generator delay.
@@ -130,8 +130,8 @@ second attempt. A request that reaches an Ollama that has not yet loaded the mod
 
 | Item | Status | Reason |
 | --- | --- | --- |
-| The ramp (ADR-0018) | run, reports not committed | Separate 20 s runs at rising target rates, all invalid on the same lag rule, so a guide to the knee and not a published result. B followed its target at 25 and 50 requests/s and fell behind at 100 and above, where it achieved about 46 to 54/s with hundreds of requests in flight, with the memory limiter as well as with Redis; A followed 100/s and not 200/s; C followed 100/s with both limiters. 40/s was chosen as below B's ceiling. The reports back no figure on this page, and the owner chose to leave them uncommitted (2026-11-25). The ceiling is a backlog item in [TASKS.md](TASKS.md). |
-| A valid run of any scenario | none obtained on this machine | The Windows timer floor fails the lag rule (above). A run under Linux, WSL2 or Compose would be needed. |
+| The ramp (ADR-0018) | run, reports not committed | Separate 20 s runs at rising target rates, all invalid on the same lag rule, so a guide to the knee and not a published result. B followed its target at 25 and 50 requests/s and fell behind at 100 and above, where it achieved about 46 to 54/s (peaks of 638 to 1107 requests in flight at 100/s and about 101 to 105 at 200/s and above), with the memory limiter as well as with Redis, and three of these runs also had transport errors (a `ConnectError` count in two runs at 100/s, one `ReadError` at 200/s); A followed 100/s and not 200/s; C followed 100/s with both limiters. 40/s was chosen as below B's ceiling. The reports back no figure on this page, and the owner chose to leave them uncommitted (2026-11-25). The ceiling is a backlog item in [TASKS.md](TASKS.md). |
+| A valid run of any scenario | none obtained on this machine | The Windows timer floor fails the lag rule (above). The generator would have to run on Linux or WSL2. |
 | The Compose stack, on the owner's machine | not run | It routes only to the mock provider with the Redis limiter and does not contain the fake upstream, so it cannot run scenario B; the generator would still have run on Windows. CI's `container` job starts it. |
 
 ## Reproducing
