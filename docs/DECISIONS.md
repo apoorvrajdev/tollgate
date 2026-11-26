@@ -23,9 +23,9 @@ Accepted decisions change only through a new ADR.
 | [0014](#adr-0014) | Semantic cache: what is compared, who shares it, what a hit costs, and how the threshold is chosen (amends ADR-0007 and ADR-0011) | Accepted - amended by ADR-0016 | 2026-11-21 |
 | [0015](#adr-0015) | Embeddings from a local Ollama, cosine in the standard library, the cache in process memory | Accepted | 2026-11-21 |
 | [0016](#adr-0016) | Observability: a JSON request log and Prometheus metrics with the standard library, from bounded fields only (amends ADR-0013 and ADR-0014) | Accepted | 2026-11-23 |
-| [0017](#adr-0017) | Container image, Docker Compose, and the deployment target: one host (amends ADR-0006) | Accepted | 2026-11-23 |
+| [0017](#adr-0017) | Container image, Docker Compose, and the deployment target: one host (amends ADR-0006) | Accepted - amended by ADR-0019 | 2026-11-23 |
 | [0018](#adr-0018) | Load benchmarks: a fixed arrival rate measured from the due time, a fake upstream, recorded runs only | Accepted | 2026-11-23 |
-| [0019](#adr-0019) | No published image and no hosted demo; the demo is a recorded local run (amends ADR-0017) | Proposed | 2026-11-26 |
+| [0019](#adr-0019) | No published image and no hosted demo; the demo is a recorded local run (amends ADR-0017) | Accepted | 2026-11-26 |
 
 ---
 
@@ -989,7 +989,8 @@ ADR-0007 and ADR-0011)** · Accepted - amended by ADR-0016 · 2026-11-21
 
 ## ADR-0017
 
-**Container image, Docker Compose, and the deployment target: one host (amends ADR-0006)** · Accepted ·
+**Container image, Docker Compose, and the deployment target: one host (amends ADR-0006)** · Accepted - amended
+by ADR-0019 ·
 2026-11-23
 
 - **Context:** The deployment target is decided in a Phase 4 ADR (TASKS.md, "Requirements that carry into the
@@ -1185,7 +1186,7 @@ Accepted · 2026-11-23
 
 ## ADR-0019
 
-**No published image and no hosted demo; the demo is a recorded local run (amends ADR-0017)** · Proposed ·
+**No published image and no hosted demo; the demo is a recorded local run (amends ADR-0017)** · Accepted ·
 2026-11-26
 
 - **Context:** ADR-0017 left two choices to the Phase 5 demo: whether to publish the image to the GitHub
@@ -1202,7 +1203,7 @@ Accepted · 2026-11-23
   - (a) Publish to the GitHub Container Registry on every push to `main`.
   - (b) Publish on version tags only.
   - (c) Do not publish. The image is built locally by `docker compose build`, and `docs/demo.md` is the demo.
-- **Decision (proposed):** (c). With no hosted instance, nothing would use a published image. Publishing would
+- **Decision:** (c). With no hosted instance, nothing would use a published image. Publishing would
   add the first write permission to CI, a public artifact whose base image ages between manual digest updates,
   and a versioning policy, and none of that helps a reader. Anyone can run the stack from source with one
   command, and anyone can read the demo without running it.
@@ -1212,7 +1213,7 @@ Accepted · 2026-11-23
   - CI keeps `contents: read` only.
   - The Backlog item "Image publishing" becomes "revisit if a hosted instance is added" (T-507).
   - ADR-0017's status becomes "Accepted - amended by ADR-0019".
-  - Delivered by T-505 and T-507.
+  - Delivered by T-505 and T-507. Accepted by the owner as written on 2026-11-26.
 
 ---
 
