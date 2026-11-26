@@ -183,11 +183,16 @@ Read from the table:
 40/s was chosen for the published runs as below B's ceiling. Why B stops near 50/s is not known from these runs;
 it is a Backlog item in [TASKS.md](TASKS.md).
 
-Two reports carry a suffix, and their fields alone do not say why they were made, so their purpose is not
-recorded:
+Two reports carry a suffix. Their fields do not say why they were made; the purposes below are the owner's
+account (2026-11-26):
 
-- `ramp-A-r100-full.json` is A at 100/s measured for 100 s (10,000 requests, so its lag p99 is not withheld).
-- `ramp-B-redis-r100-cpucheck.json` has the same settings as `ramp-B-redis-r100.json`.
+- `ramp-A-r100-full.json` is the full-length run of A at 100/s: 100 s measured, so it has 10,000 measured
+  requests and its p99s are published instead of withheld.
+- `ramp-B-redis-r100-cpucheck.json` re-runs B with Redis at 100/s, with the same settings as
+  `ramp-B-redis-r100.json`, while the CPU use of each process was sampled. The owner reports the gateway at 100%
+  CPU and the generator at 44 to 67%. Those figures are not in the report, and how they were sampled (the tool,
+  the interval, and whether 100% means one core) was not recorded, so they are an observation, not a measurement
+  this page can reproduce. They do not by themselves establish the cause of B's ceiling; T-502 investigates it.
 
 ## Not run, or not published
 
