@@ -9,7 +9,42 @@ A task becomes `done` in the pull request that delivers it (the status is set in
 takes effect when the pull request merges). `in-progress` and `review` exist only on the task branch; `main`
 shows `todo`, `blocked` or `done`.
 
-## Current phase: 4 - Operations
+## Current phase: 5 - Demo and write-up
+
+A first-time reader, such as a recruiter or an interviewer, learns from the README and the pages it links what
+Tollgate does, what was measured and what was found. Every figure can be traced to a committed report or a
+recorded transcript. The write-up covers three findings:
+
+- The semantic cache eval found no safe threshold for `all-minilm`.
+- Every load run at 40 requests/s on Windows failed ADR-0018's lag rule, with a lag p99 consistent with the
+  Windows timer tick (an external figure, not measured here).
+- Through the `openai` adapter, the gateway fell behind targets of 100 requests/s and above, at about 46 to 54/s.
+  T-502 either records the cause with measurements or the write-up states it as suspected and unconfirmed.
+
+The demo is text: curl output, `/metrics` text and JSON log lines from one real local run, with optional
+screenshots. There is no hosted demo and no published image (ADR-0019), and no Prometheus or Grafana. There is
+no new dependency, no new image and no `app/` change. The contract is unchanged. Planned 2026-11-26;
+ADR-0019 proposed.
+
+**Gate (owner signs off):**
+
+- [ ] Every Phase 5 task is `done`, and `python scripts/check.py` is green locally and in CI
+- [ ] ADR-0019 accepted or revised, and ADR-0017's status line names it
+- [ ] Every figure in the README, `docs/findings.md`, `docs/benchmarks.md` and `docs/demo.md` comes from a
+      committed report or a recorded transcript, with its settings, and a figure from an invalid run is called
+      invalid wherever it appears
+- [ ] The throughput ceiling's cause is stated only as far as T-502's recorded measurements show it; otherwise
+      it is "suspected, unconfirmed"
+- [ ] The README's first screen states what Tollgate is and the three findings, with links to their sources,
+      and neither the README nor ARCHITECTURE calls anything built "planned" or anything unbuilt "built"
+- [ ] Every edge in every diagram is backed by a line of code or of `compose.yaml`
+- [ ] No key, token or other secret appears in any committed file, transcript or screenshot
+- [ ] Every commit is authored by the owner, with no co-author trailers
+
+## Phase 4 - Operations (tasks done; gate awaiting the owner's sign-off)
+
+All nine tasks are done. The gate item "README and ARCHITECTURE describe what is built" is delivered in Phase 5
+by T-504 and T-506. The owner signs off the other items when approving the Phase 5 plan, or says which stay open.
 
 Every request writes one JSON log line built only from bounded fields, and `/metrics`, behind a token of its
 own, exports Prometheus metrics written with the standard library. These include the settle cap, the reply size
@@ -150,8 +185,8 @@ Delivery order in Phase 0: T-001, T-003, the owner makes `lint and test` a requi
 T-004. Delivery order in Phase 1: T-101 to T-108 in number order. Delivery order in Phase 2: T-201 to T-204,
 then T-208 and T-209 (both added 2026-11-14), then T-205 and T-206, then T-207 and T-210 (added
 2026-11-14) in either order. Delivery order in Phase 3: T-301 to T-307 in number order. Delivery order in
-Phase 4: T-401 to T-409 in number order. The rows below are in delivery order; the cards further down are listed
-by ID.
+Phase 4: T-401 to T-409 in number order. Delivery order in Phase 5: T-501 to T-507 in number order. The rows
+below are in delivery order; the cards further down are listed by ID.
 
 | ID | Title | Phase | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -194,6 +229,13 @@ by ID.
 | T-407 | Load report: statistics, validity check and command line | 4 | done | T-406 |
 | T-408 | Cache scan and embedding latency benchmarks | 4 | done | T-407 |
 | T-409 | The owner's benchmark runs and the operations guide | 4 | done | T-405, T-407, T-408 |
+| T-501 | Commit the ramp reports | 5 | todo | Phase 5 plan merged |
+| T-502 | Investigate the scenario B throughput ceiling | 5 | todo | T-501 |
+| T-503 | The findings write-up | 5 | todo | T-502 |
+| T-504 | ARCHITECTURE refresh: deployment and component diagrams | 5 | todo | ADR-0019 accepted |
+| T-505 | The text demo | 5 | todo | ADR-0019 accepted |
+| T-506 | README rewrite, findings first | 5 | todo | T-503, T-504, T-505 |
+| T-507 | Phase 5 close-out and TASKS housekeeping | 5 | todo | T-506 |
 
 ---
 
@@ -1995,6 +2037,275 @@ by ID.
   `docs(setup): add the operations guide`, `docs(tasks): complete T-409`.
 - **Size:** about 250 lines plus the JSON reports.
 
+### T-501 - Commit the ramp reports
+
+- **Status:** todo
+- **Goal:** the ramp figures in `docs/benchmarks.md` and in the Backlog have a committed source.
+- **Context:** ADR-0018; `docs/benchmarks.md` ("Not run, or not published"); the Backlog item "Gateway
+  throughput with an `openai` provider"; the 19 untracked `docs/benchmarks/ramp-*.json` reports; the T-409 Log
+  row.
+- **Depends on:** the Phase 5 plan merged.
+- **Deliverables:**
+  - The 19 `ramp-*.json` reports, committed byte for byte. Each is read in full first and searched with the
+    T-409 key patterns. If one holds a key or token, stop and ask the owner.
+  - `docs/benchmarks.md`: a "Ramp" section replaces the "run, reports not committed" row. It has one row per
+    report: scenario, limiter, target rate, achieved rate, measured seconds, request count, status counts,
+    transport errors by kind, peak in flight, lag p50 and lag p99 (or "withheld: too few samples", as the
+    report records), validity with the rule or rules that fail, and file.
+  - The two reports with suffixes (`ramp-A-r100-full.json` and `ramp-B-redis-r100-cpucheck.json`) are
+    described only from their own fields. If the fields do not show what a run was for, the owner says so
+    (OWNER-CHECK), or the row reads "purpose not recorded".
+  - The Backlog item is reworded to cite the committed reports.
+  - The T-409 Log row is not edited. A new Log row records that on 2026-11-26 the owner reversed the
+    2026-11-25 choice to leave the reports uncommitted.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. All 19 files are committed and identical to the working copies (SHA-256 before and after, listed in the
+     PR body).
+  2. Every ramp figure in `docs/benchmarks.md` and in the Backlog matches a field of a committed report. The
+     verifier recomputes each and finds 0 mismatches.
+  3. Every ramp row states its validity and the failing rule as the report records them.
+  4. A search of the committed files with the T-409 patterns finds no key, token or secret.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
+- **Branch and commits:** `docs/t-501-ramp-reports`; `docs(benchmarks): commit the ramp reports`,
+  `docs(tasks): complete T-501`.
+- **Size:** about 60 lines plus the 19 reports.
+
+### T-502 - Investigate the scenario B throughput ceiling
+
+- **Status:** todo
+- **Goal:** the ceiling of scenario B (about 46 to 54 requests/s against targets of 100 and above) is either
+  explained by recorded measurements, or stated as suspected and unconfirmed, with what was ruled out.
+- **Context:** ADR-0018; `docs/benchmarks.md` (the ramp section from T-501); the Backlog item.
+  - The provider client is built in `app/main.py` (`build_http_client`) with no `limits=`, so it uses httpx's
+    default pool. That is a thing to measure, not an assumed cause.
+  - Code: `app/providers/openai.py`, `run_route` and its attempts in `app/routing/`.
+  - The request log's `attempts` field, and the metrics `tollgate_provider_attempt_duration_seconds` and
+    `tollgate_http_request_duration_seconds`.
+  - Scripts: `scripts/fake_upstream.py`, `scripts/bench_load.py`.
+- **Depends on:** T-501.
+- **Timebox:** at most eight runs: the four in step 1, one in each of steps 2 and 3, and two variations. If
+  they end without a confirmed cause, the conclusion is "suspected, unconfirmed". That is an accepted outcome,
+  not a blocked task.
+- **Method:** standard library only, so no `py-spy` and no new dependency. Every run uses the settings
+  recorded in the matching committed ramp report (20 s measured, 5 s warm-up, the tokens per minute and capacity
+  recorded there, a 50 ms upstream delay), changing only the rate or the one variable under test. The note
+  lists each run's settings.
+  1. **Reproduce.** Run scenario B (memory limiter) at 50 and 100 requests/s on the current `main` commit,
+     with two controls at 100/s: scenario A (the upstream alone) and scenario C (memory limiter, no upstream).
+     If B now follows 100/s, record that and go straight to the conclusion.
+  2. **Locate the time.** During B at 100/s, scrape `/metrics` before and after, and keep the request log.
+     Compare the mean provider-attempt duration with the mean request duration, and both with the 50 ms
+     upstream delay. Compare each run's lag p50 and peak in flight from its report. Together these show
+     whether the time goes inside the attempt (the adapter, httpx and the upstream), around it in the gateway,
+     or in the generator.
+  3. **Profile.** Run B at 100/s once more with the gateway under `cProfile`, from a launcher kept outside the
+     repository. The note quotes the launcher in full, and records the top 20 functions by cumulative time.
+  4. **Isolate.** Make at most two variations, each a single change applied to a scratch copy and never
+     committed, such as the client's pool limits or the generator's `--max-connections`. The note quotes each
+     diff. A variation confirms a cause only if B then follows a target it did not follow before, with every
+     other setting the same.
+- **Deliverables:**
+  - `docs/benchmarks.md` gains a "Throughput ceiling investigation" section: each run with its settings and its
+    report; the metrics and log figures; the profile's top entries; each variation with its diff.
+  - The conclusion takes exactly one of two forms: "Cause: X, shown by run Y", or "Suspected, unconfirmed: X;
+    ruled out: ...".
+  - The reports, under `docs/benchmarks/` as `ceiling-*.json`.
+  - The Backlog item is updated. A fix, if a cause is found, becomes a new Backlog item and is not part of this
+    task. There is no `app/` change.
+  - OWNER-CHECK: the runs use only localhost (the gateway, the fake upstream and the generator). The owner
+    runs them, or approves running them on localhost, before the task starts.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Every figure in the section matches a committed report, or a `/metrics` excerpt or log excerpt quoted in
+     the section.
+  2. The conclusion uses one of the two forms, and a "Cause" names the variation run that shows it.
+  3. Each run is labelled valid or invalid under ADR-0018, as its report says.
+  4. There is no change in `app/` and no dependency, and the secret search is clean.
+  5. OWNER-CHECK: the owner confirms the wording of the conclusion.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+- **Branch and commits:** `docs/t-502-ceiling`; `docs(benchmarks): record the throughput ceiling
+  investigation`, `docs(tasks): complete T-502`.
+- **Size:** about 150 lines plus the reports.
+
+### T-503 - The findings write-up
+
+- **Status:** todo
+- **Goal:** one page tells the three findings, each as question, method, result, meaning and limits, with
+  every figure linked to its source.
+- **Context:** `docs/cache-eval.md`, `docs/benchmarks.md`, ADR-0005, ADR-0014, ADR-0015, ADR-0018, the T-307
+  and T-409 Log rows, and T-502's conclusion.
+- **Depends on:** T-502.
+- **Deliverables:** `docs/findings.md`, with these parts:
+  - **Summary.** The three findings, in at most three sentences each.
+  - **Finding 1: no safe cache threshold.**
+    - The question: can one cosine threshold separate same-meaning from different-meaning pairs?
+    - The dataset: 80 pairs and their SHA-256.
+    - The result: no threshold below 1.00 had zero wrong hits. At 0.99, 2 of 40 same-meaning pairs hit and 4
+      of 40 different-meaning pairs hit. All 8 negation pairs hit through 0.88, and all 8 changed-number pairs
+      through 0.78.
+    - What follows from it: no default threshold, the cache off by default, no threshold recommended.
+    - Limits: one model, and a small hand-written dataset (80 pairs), with the threshold judged on the same
+      data it was measured on. `bge-m3` was not run.
+  - **Finding 2: the lag rule on Windows.**
+    - What the rule guards against.
+    - What was observed: in the 15 runs at 40 requests/s, the lag p99 was 14.0 to 16.1 ms. That is consistent
+      with the Windows timer tick of about 15.6 ms, an external figure not measured here. If the tick is the
+      floor, the 10% rule could pass only with a latency p99 above about 150 ms.
+    - The ramp runs at and above the ceiling fail the rule with lags of seconds. That is a different matter,
+      covered under Finding 3.
+    - What that means for the published figures. It is untested whether a generator on Linux or WSL2 gives a
+      valid run.
+  - **Finding 3: the throughput ceiling,** worded exactly as T-502's conclusion allows.
+  - **How the figures were produced:** the evidence rules (ADR-0005, ADR-0018).
+  - **What I would do next,** taken from Backlog items and linked to them.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. Every number appears in a committed report, in `docs/cache-eval.md` or in `docs/benchmarks.md`. The
+     verifier recomputes each and finds 0 mismatches.
+  2. Every figure from an invalid run is called invalid in the same sentence or table row.
+  3. Finding 3 uses T-502's conclusion form.
+  4. No sentence claims more than its source. The reviewer's table gives a source for each claim.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+- **Branch and commits:** `docs/t-503-findings`; `docs(findings): write up the cache, lag and ceiling
+  findings`, `docs(tasks): complete T-503`.
+- **Size:** about 200 lines.
+
+### T-504 - ARCHITECTURE refresh: deployment and component diagrams
+
+- **Status:** todo
+- **Goal:** `docs/ARCHITECTURE.md` describes what is built, with three diagrams checked against the code.
+- **Context:** `docs/ARCHITECTURE.md`, `compose.yaml`, `Dockerfile`, `deploy/`, the cross-package imports in
+  `app/`, ADR-0016, ADR-0017, ADR-0019.
+- **Depends on:** ADR-0019 accepted.
+- **Deliverables:**
+  - **Status line.** Phase 4 done. The line "sections 2 to 4 describe the target design" is replaced by a
+    built or not-built label on each part.
+  - **Request flow.** The existing diagram is checked against the chat route and gains the log line and the
+    metrics.
+  - **Deployment diagram** (Mermaid), labelled from `compose.yaml` and `deploy/`:
+    - the client reaches `127.0.0.1:8000`, served by the gateway container (non-root, one uvicorn process)
+    - `redis:7.4.12`, with no published port
+    - `ollama`, in an opt-in profile
+    - the route file, mounted read-only
+    - logs on stdout
+    - `/metrics` scraped by a Prometheus outside the repository, drawn dashed and labelled "outside the
+      stack", backed by the `/metrics` route in `app/` rather than by `compose.yaml`
+  - **Component diagram** (Mermaid): the `app/` packages (`api`, `routing`, `providers`, `limits`, `cache`,
+    `observability`, `settings`, `clock`, `main`), with arrows in import direction.
+  - Section 5's layout updated: `deploy/`, `Dockerfile`, `compose.yaml` and the benchmark scripts.
+- **Contract:** unchanged. No interface in section 3 changes. If one turns out wrong, stop and ask the owner:
+  an interface change needs the owner's approval.
+- **Acceptance criteria:**
+  1. The verifier's table backs every diagram edge with a line of code or of `compose.yaml`.
+  2. Every import between `app/` packages appears as an edge in the component diagram.
+  3. No built part is labelled planned, and every part has a label.
+  4. OWNER-CHECK: the diagrams render on the PR's GitHub page.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+- **Branch and commits:** `docs/t-504-architecture`; `docs(architecture): add deployment and component
+  diagrams`, `docs(tasks): complete T-504`.
+- **Size:** about 150 lines.
+
+### T-505 - The text demo
+
+- **Status:** todo
+- **Goal:** a reader sees the gateway work without running it: real requests and their real outputs.
+- **Context:** `docs/setup.md` (Compose, Metrics, Logs), `compose.yaml`, `deploy/routes.compose.json`,
+  `scripts/smoke_container.py`, ADR-0016, ADR-0019.
+- **Depends on:** ADR-0019 accepted.
+- **Deliverables:**
+  - `docs/demo.md`: one sequence, each step with its exact command and the output captured from one real run.
+    The page header records the date, the commit, the platform, and how the gateway was served: the Compose
+    stack, or bare uvicorn with the mock route if Docker is not available. The steps:
+    1. `GET /health`
+    2. a chat completion through the mock: a 200 with `x-tollgate-provider`, `x-tollgate-fallbacks` and the
+       `x-ratelimit-*-tokens` headers
+    3. no API key: 401
+    4. a small bucket exhausted: 429 with `Retry-After` (the run sets a low `TOLLGATE_TOKENS_PER_MINUTE`, and the
+       page says so)
+    5. a `/metrics` excerpt after the run, saying how the lines were chosen
+    6. the JSON log lines of those requests
+    7. optional, only if a local Ollama runs: a cache miss and then a hit (`x-tollgate-cache`). The page states
+       the threshold used and that it is not a recommended one, since none was found.
+  - Commands read the key and the token from environment variables, so no value appears in a command. Output is
+    pasted unedited, apart from elisions marked `...`.
+  - OWNER-CHECK (optional): screenshots of the same run under `docs/demo/`, PNG, at most 300 KB each, checked
+    by eye for secrets.
+  - No unknown-model 404 step: both mock route files (`deploy/routes.compose.json` and
+    `deploy/bench/routes.mock.json`) have a `default` route, so any model name returns a 200 (`docs/setup.md`).
+  - OWNER-CHECK: the owner runs the sequence, or approves running it on localhost, before the task starts.
+- **Contract:** unchanged. No new script and no dependency.
+- **Acceptance criteria:**
+  1. Every output block comes from the recorded run named in the header, and every elision is marked.
+  2. The verifier runs the same sequence against a local server with the mock and the route file named in the
+     page header. Status codes and header names (not their values) match the page.
+  3. No key or token value appears in any committed file or image.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+- **Branch and commits:** `docs/t-505-demo`; `docs(demo): add the recorded text demo`,
+  `docs(tasks): complete T-505`.
+- **Size:** about 200 lines, plus optional images.
+
+### T-506 - README rewrite, findings first
+
+- **Status:** todo
+- **Goal:** within the first screen, a first-time reader learns what Tollgate is, what was found, and where to
+  see it run.
+- **Context:** `README.md`, `docs/findings.md`, `docs/benchmarks.md`, `docs/demo.md`, `docs/ARCHITECTURE.md`,
+  the index of `docs/DECISIONS.md`, and the latest green CI run on `main`.
+- **Depends on:** T-503, T-504, T-505.
+- **Deliverables:** `README.md` rewritten in this order:
+  1. a one-sentence description and the badges
+  2. "What I found": the three findings, two or three lines each, linking `docs/findings.md`
+  3. "See it run": a short excerpt of `docs/demo.md`, linking it
+  4. what it does: one short table of the built features
+  5. architecture: one diagram taken from ARCHITECTURE, with a link
+  6. how it was built: pull requests only, mutation checks, the contract snapshot, evidence-first figures, kept
+     short
+  7. running it locally: Compose and bare uvicorn
+  8. limitations, kept and brought up to date
+  9. the documentation table (findings, benchmarks and demo added) and the ADR table through 0019
+
+  Everything stale goes: the Phase 3 status, "No performance figures yet", Compose, metrics and benchmarks
+  listed as planned, and "None" under operations in the tech stack. The test counts and the CI run id are
+  current, taken from `main` at the time of writing.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. The first two sections are the description with the badges, and "What I found" with the three findings
+     and their links; "See it run" follows them.
+  2. Every figure matches its linked source (verifier table).
+  3. No built feature is called planned, and nothing unbuilt is called built (verifier table against the code
+     and the docs).
+  4. Every relative link and anchor resolves.
+  5. OWNER-CHECK: the owner reads the rendered README on the PR and approves it.
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+- **Branch and commits:** `docs/t-506-readme`; `docs(readme): rewrite the README to lead with the findings`,
+  `docs(tasks): complete T-506`.
+- **Size:** a 258-line file rewritten to about 250 lines, about 450 changed lines. That is above the ~400-line
+  plan threshold, and approving this plan approves the size.
+
+### T-507 - Phase 5 close-out and TASKS housekeeping
+
+- **Status:** todo
+- **Goal:** `docs/TASKS.md` and `docs/DECISIONS.md` show the project's state at the end of Phase 5.
+- **Context:** `docs/TASKS.md` (the phase sections, the board, Later phases, the Backlog), the DECISIONS index.
+- **Depends on:** T-506.
+- **Deliverables:**
+  - The Phase 5 section marked complete once the owner signs off its gate. The current-phase header updated
+    to say that no phase is open.
+  - The Later phases row for Phase 5 marked done.
+  - The Backlog: the "Image publishing" item reworded or removed per ADR-0019, the throughput item as T-502
+    left it, and any other item a Phase 5 task closed.
+  - A Log row.
+- **Contract:** unchanged.
+- **Acceptance criteria:**
+  1. The board's statuses match the cards.
+  2. Every Backlog item left is still open.
+  3. Every new Log row has exactly four cells (Python scan of unescaped pipes).
+- **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+- **Branch and commits:** `docs/t-507-close-out`; `docs(tasks): close out Phase 5`.
+- **Size:** about 60 lines.
+
 ## Later phases (broken into tasks at each gate)
 
 | Phase | Epic |
@@ -2003,7 +2314,7 @@ by ID.
 | 2 | Model routing: planned 2026-11-13 as T-201 to T-207; T-208, T-209 and T-210 added 2026-11-14 (see the current phase) |
 | 3 | Semantic caching: planned 2026-11-21 as T-301 to T-307 (see the current phase) |
 | 4 | Operations: Docker Compose, observability, reproducible load benchmarks: planned 2026-11-23 as T-401 to T-409 (see the current phase) |
-| 5 | Demo and write-up |
+| 5 | Demo and write-up: planned 2026-11-26 as T-501 to T-507 (see the current phase) |
 
 ### Requirements that carry into the task cards
 
@@ -2168,3 +2479,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-24 | T-407 | Done. `python scripts/bench_load.py` turns a T-406 run into a JSON report and a Markdown table with ADR-0018's figures, validity check and settings. Latency runs from the due time to the end and lag from the due time to the hand-over; percentiles are `statistics.quantiles(n=100, method="inclusive")` (p50, p95, p99 and the maximum for latency; p50, p99 and the maximum for lag). Warm-up requests are counted apart, with their own error counts, and left out of every figure and of validity (owner decision). A run is valid only with no non-200, no transport error, and a lag p99 at most 10% of the latency p99, always computed from the raw p99s; a p99 is published only from 10,000 measured requests and otherwise shown as "too few samples". Errors are counted by status and by transport error class. The achieved rate is measured requests over the last measured end minus the first measured due (owner decision), or none over an empty span. The report records the scenario, rate, duration, warm-up, connection cap, limiter, tokens per minute, capacity, the route file's SHA-256 with LF line endings (`routes_sha256_lf`, never its content), the upstream delay, the server, the body's size (79 bytes) and SHA-256, the git commit (`git rev-parse HEAD`, or unknown), Python version, OS, CPU count, same or separate machine, the peak in flight and the generator's CPU time. The key is read from the variable named by `--api-key-env`, must be printable ASCII, and is never printed or written; the URL is never recorded, and argparse errors never repeat a rejected value. The gateway's settings are optional flags shown as null or n/a (owner decision). Exit codes: 0 valid, 3 invalid with the report still printed and written, 1 no report (key missing or unusable, route file unreadable, output directory missing, which is checked before any load is sent), 2 usage. The owner approved about 900 lines over the card's 450, then accepted about 1100 (final 1184). Review round one found no test on the JSON figure values and ten minor gaps (the empty-span rate, a zero warm-up, a URL without a host, the cap reaching the real client, a non-ASCII key, values repeated by argparse, a late output failure, the digest's line endings, the lag reason's text, the host facts); all now have tests. Contract unchanged. Known gaps: the in-process run on `create_app()` checks the report's shape and counts only, because FastAPI runs the gateway's sync dependencies in threads, so its timings are not deterministic; per-scenario flag requirements are left to T-409 | Branch `feat/t-407-load-report`; files `scripts/bench_load.py`, `tests/test_bench_report.py`, `docs/ARCHITECTURE.md`; `scripts/check.py` 2436 passed; mutation table 53 of 53 caught (latency from the hand-over, lag from the end, warm-up in the figures, the error counts, the achieved rate or the floor count, warm-up errors invalidating the run, `exclusive` quantiles, `n=99` or a cut index off by one, the floor at 9,999 or `>`, validity skipped below the floor, `<` in the lag check, a lag share of 0.11, a non-200 or a transport error left out of validity, 200 counted as an error, the key or the route file content in the report, the digest without LF normalising, the maximum as the last value, exit 0 for an invalid run, the machine flag inverted, CPU time as the end reading, an unchecked git result, a p99 shown below the floor, a blank or non-printable key accepted, the empty-span guard, JSON figures swapped or dropped, a zero warm-up rejected, a URL without a host or unstripped, the cap not passed to the client, argparse repeating a value in single or double quotes, the output check after the run, wrong host facts, a hard-coded lag reason) |
 | 2026-11-25 | T-408 | Done. `python scripts/bench_cache.py` has two modes. `scan` fills one partition of an `InMemorySemanticCache` with N seeded unit vectors of D dimensions for each combination of `--entries` and `--dimensions` (several values each; the defaults are ADR-0018's grid of 1,000, 10,000 and 100,000 by 384 and 1,024, owner decision), and times `lookup` with `timeit.Timer(...).repeat(number=1)` at a similarity threshold of 2.0 that no entry reaches, so every lookup scans every entry and misses; it reports the minimum, median and maximum per lookup. Each timed lookup is run to completion directly inside a running event loop (owner decision), and a lookup that pauses on an await stops the run at run time with a fixed error, exit 1 and no report (owner requirement). A combination whose vectors (entries x dimensions x 8 bytes) exceed `--max-vector-bytes` (default 1 GiB, chosen) is skipped and reported as skipped; only one combination's cache is held at a time. Seeds are non-negative, because `random.Random` seeds with an int's absolute value. `embed` builds the gateway's `OllamaEmbedder`, records the Ollama version with `fetch_ollama_version`, discards one call and times `--calls` sequential calls (default 100); an `EmbeddingError` stops the run with its kind-and-status message and no figure, and the URL is never printed or written. Both modes write a Markdown report and, with `--output` (added, owner decision), a JSON report with their settings, the git commit, Python version, OS and CPU count. `Parser` and `positive_int` in `scripts/bench_load.py` are now public and shared with `bench_cache.py` (owner request), which also imports `ScriptError` and `fetch_ollama_version` from `scripts/eval_cache.py`. No figure is published here: the owner's runs are T-409. Size about 1,290 changed lines against the card's ~400 (the owner approved ~900, and was told of the overrun). Review round one found that the previous combination's cache stayed alive during the next fill, so peak vector memory could pass the limit; fixed. | `scripts/bench_cache.py`, `tests/test_bench_cache.py`, `scripts/bench_load.py`, `docs/ARCHITECTURE.md`; `scripts/check.py` 2477 passed; mutation table 34 of 34 caught after one kill test was added for a removed `coroutine.close()` (a threshold of 0.0 or -2.0 that lets entries hit, each entry in its own partition, the fill stopped one short, the discarded call kept, minimum and median swapped, `>=` in the memory guard, an `EmbeddingError` swallowed on the discarded call, mid-run or in the runner, the previous cache kept alive, the pause guard returning None or another message, `close()` removed, the miss check removed or neutered, the fill check removed with one entry fewer allowed, `number=repeats` or one repeat too many, `median_low`, 4 bytes per value, `break` after a skip, normalising dropped, the query drawn after the entries, the default seed or limit passed instead of the given one, another default URL, the URL in the report, a report written after a failure, the version fetch removed, one timer start for every call, a negative seed accepted or zero rejected) |
 | 2026-11-25 | T-409 | Done. The owner's benchmark runs are recorded and the operations guide is written. Load: 15 runs (scenarios A, B and C, B and C each with the memory limiter and the Redis limiter, 3 repeats each) at 40 requests/s, 250 s measured after 10 s of warm-up, 10,000 measured requests each, on Windows 11 (Windows-11-10.0.26300-SP0, 16 CPUs, Python 3.13.2), with the generator and the server on the same machine; the fake upstream delay was 50 ms and the limiter's tokens per minute and capacity were both 110,400. Every run is invalid under ADR-0018's lag rule (lag p99 above 10% of latency p99): the lag p99 was 14.0 to 16.1 ms in all 15, consistent with the Windows timer tick of about 15.6 ms (not measured), and every other validity condition held (all 200, no transport errors). Latency p99 in ms: A 81.5 to 84.4, B memory 94.5 to 111.3, B Redis 120.1 to 145.8, C memory 25.8 to 29.1, C Redis 33.1 to 39.4. B minus A per repeat: memory p50 +2.5 to +3.7 ms and p99 +12.9 to +29.8 ms; Redis p50 +5.1 to +14.2 ms and p99 +38.5 to +64.2 ms. Cache scan (minimum per lookup): 8.0 ms at 1,000 entries of 384 dimensions, 2,136 ms at 100,000 entries of 1,024. Embedding latency: `all-minilm` on Ollama 0.40.18, 100 calls, median 14.81 ms, minimum 12.62 ms, maximum 47.35 ms. `docs/setup.md` gains running with Docker Compose, Metrics, Logs, running the benchmarks, and one process per container. A Backlog item records that scenario B did not follow targets of 100 requests/s and above in diagnostic runs. The contract is unchanged, and no dependency or test was added. OWNER-CHECK, confirmed in writing by the owner on 2026-11-25: all 15 load runs are published as invalid under the lag rule (Windows timer tick against the 10% limit). Ramp diagnostic files: not committed, per owner instruction (2026-11-25) to keep diagnostic ramp-* runs untracked since they back no published figure. Compose run: not run. Investigated and found Compose could not isolate the lag-rule question (the generator's own clock is the failure, not the gateway's platform) and would not cleanly test the throughput ceiling either; the owner accepted this reasoning and chose option 3 (publish at 40/s, report as invalid) instead, 2026-11-25 | `python scripts/check.py` passed just now (exit 0: ruff, format, mypy strict, contract, 2477 tests passed, 45 deselected); no test is added, so there is no mutation table; the OpenAPI snapshot is unchanged; a search of the committed files (`docs/benchmarks.md`, `docs/setup.md`, `docs/TASKS.md` and the 17 reports) for key patterns (`sk-`, `sk-ant-`, `AKIA`, `ghp_`, a Bearer value, an `api_key` value, the benchmark keys) found no key-shaped value; verifier, round one: every figure in `docs/benchmarks.md` recomputed from the committed reports with 0 mismatches, each load report names the OS, CPU count, Python version, same-machine flag and server, the setup guide's commands, variables, metric names, log fields and the series count (127 for one provider before any request) checked against the code; its one FAIL, the first wording of the Backlog item (figures with no committed source), was fixed by rewording it to what the ramp reports hold; reviewer, round one: CHANGES REQUIRED (the ramp row said B stopped following its target a little above 40/s, when it followed 50/s and fell behind at 100/s and above; the Backlog item's figures; the waivers; minor items on the setup guide and the embedding note), all fixed; reviewer, round two: APPROVE, with every number in `docs/benchmarks.md` recomputed again and four Minor items (the ramp row's in-flight peaks and transport errors, the Redis targets in the Backlog item, the Compose wording, and the settings row for A) fixed in this pull request; accepted: the Windows timer tick of about 15.6 ms is an external fact and not measured here, and the figures come from invalid runs |
+| 2026-11-26 | - | Phase 5 planned: cards T-501 to T-507, the Phase 5 gate and board rows; ADR-0019 (no published image and no hosted demo, amending ADR-0017) proposed. Owner decisions taken before planning: the 19 ramp reports are committed (reversing the 2026-11-25 choice); the throughput ceiling's suspected cause in the `openai` adapter was never recorded and is treated as unconfirmed, so T-502 profiles it with a timebox, and otherwise the write-up says "suspected, unconfirmed"; the demo is text only (curl output, `/metrics` text, JSON log lines), with no Prometheus or Grafana; there is no hosted demo. The Phase 4 gate is left for the owner's sign-off, with its README and ARCHITECTURE item delivered by T-504 and T-506. No research beyond ADR-0017's 2026-11-23 sources was needed; nothing was installed | `docs/TASKS.md`; `docs/DECISIONS.md`; the planning pull request |
