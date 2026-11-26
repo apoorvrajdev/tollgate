@@ -1203,7 +1203,7 @@ Accepted · 2026-11-23
   - (a) Publish to the GitHub Container Registry on every push to `main`.
   - (b) Publish on version tags only.
   - (c) Do not publish. The image is built locally by `docker compose build`, and `docs/demo.md` is the demo.
-- **Decision:** (c). With no hosted instance, nothing would use a published image. Publishing would
+- **Decision (proposed):** (c). With no hosted instance, nothing would use a published image. Publishing would
   add the first write permission to CI, a public artifact whose base image ages between manual digest updates,
   and a versioning policy, and none of that helps a reader. Anyone can run the stack from source with one
   command, and anyone can read the demo without running it.
