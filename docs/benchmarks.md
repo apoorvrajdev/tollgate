@@ -9,7 +9,8 @@ not a production deployment.
 most 10% of the latency p99. Every run here fails that one rule, and every report says so. They are published
 as invalid runs and not tuned until they pass. Everything else about them is clean: 10,000 measured requests
 each, all 200, no transport error, no warm-up error. The cache scan and the embedding latency have no validity
-rule and are measured runs.
+rule and are measured runs. The 19 ramp runs, in their own section, are diagnostic and all invalid as well,
+three of them also for transport errors.
 
 ## Platform and settings
 
@@ -126,11 +127,72 @@ Ollama then took about 17 s. That is an observation made during this task, not i
 second attempt. A request that reaches an Ollama that has not yet loaded the model can therefore become a cache `skip`
 (the gateway's embedder has its own timeout). Every eligible request pays one such call before any provider call.
 
+## Ramp (diagnostic)
+
+Short runs at rising target rates, to find where each scenario stops following its target (ADR-0018). The
+reports carry no timestamp; they were made during T-409 (its Log row is dated 2026-11-25). They are diagnostic:
+every one is invalid, and no other figure on this page comes from them.
+
+- **Lag p99 "withheld":** a report withholds a p99 from fewer than 10,000 measured requests ("too few samples").
+- **Valid:** each report's own `invalid_reasons`, shortened. "lag" is `lag p99 above 10% of latency p99` and
+  "transport" is `transport errors`. The validity check uses the p99s computed before withholding
+  (`scripts/bench_load.py`), so a run can fail the lag rule while its lag p99 is withheld.
+
+Settings shared by all 19, as recorded in each report:
+
+- the platform, commit and request of the table above, with bare uvicorn serving B and C
+- 20 s measured after 5 s of warm-up, except `ramp-A-r100-full.json` (100 s after 10 s)
+- no connection cap
+- a 50 ms fake upstream delay in A and B
+- tokens per minute and capacity of 276,000 for B with the memory limiter and for every C run, and 1,656,000 for
+  B with Redis. Every report's `errors.by_status` is empty, so no request was refused.
+- routes: B used `deploy/bench/routes.fake-upstream.json` and C `deploy/bench/routes.mock.json`; their SHA-256
+  with LF match the reports' `routes_sha256_lf`.
+
+| Scenario | Limiter | Target | Achieved | Measured | Requests measured | Non-200 | Transport errors | Peak in flight | Lag p50 | Lag p99 | Valid | Report |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A | - | 100/s | 99.68/s | 20 s | 2,000 | none | none | 13 | 4.7 ms | withheld | no (lag) | `ramp-A-r100.json` |
+| A | - | 100/s | 99.95/s | 100 s | 10,000 | none | none | 13 | 4.8 ms | 15.6 ms | no (lag) | `ramp-A-r100-full.json` |
+| A | - | 200/s | 66.03/s | 20 s | 4,000 | none | none | 94 | 23.7 s | withheld | no (lag) | `ramp-A-r200.json` |
+| B | memory | 25/s | 24.96/s | 20 s | 500 | none | none | 5 | 5.1 ms | withheld | no (lag) | `ramp-B-memory-r25.json` |
+| B | memory | 50/s | 49.88/s | 20 s | 1,000 | none | none | 15 | 5.3 ms | withheld | no (lag) | `ramp-B-memory-r50.json` |
+| B | memory | 100/s | 48.95/s | 20 s | 2,000 | none | `ConnectError` 14 | 1,107 | 6.3 ms | withheld | no (transport; lag) | `ramp-B-memory-r100.json` |
+| B | redis | 50/s | 49.85/s | 20 s | 1,000 | none | none | 12 | 4.5 ms | withheld | no (lag) | `ramp-B-redis-r50.json` |
+| B | redis | 100/s | 50.61/s | 20 s | 2,000 | none | none | 638 | 1.9 s | withheld | no (lag) | `ramp-B-redis-r100.json` |
+| B | redis | 100/s | 46.43/s | 20 s | 2,000 | none | `ConnectError` 111 | 1,067 | 6.7 ms | withheld | no (transport; lag) | `ramp-B-redis-r100-cpucheck.json` |
+| B | redis | 200/s | 50.52/s | 20 s | 4,000 | none | `ReadError` 1 | 104 | 35.6 s | withheld | no (transport; lag) | `ramp-B-redis-r200.json` |
+| B | redis | 300/s | 54.09/s | 20 s | 6,000 | none | none | 101 | 53.9 s | withheld | no (lag) | `ramp-B-redis-r300.json` |
+| B | redis | 400/s | 53.93/s | 20 s | 8,000 | none | none | 105 | 75.9 s | withheld | no (lag) | `ramp-B-redis-r400.json` |
+| B | redis | 600/s | 52.80/s | 20 s | 12,000 | none | none | 101 | 124.1 s | 204.7 s | no (lag) | `ramp-B-redis-r600.json` |
+| C | memory | 25/s | 25.04/s | 20 s | 500 | none | none | 2 | 8.4 ms | withheld | no (lag) | `ramp-C-memory-r25.json` |
+| C | memory | 50/s | 50.01/s | 20 s | 1,000 | none | none | 4 | 4.8 ms | withheld | no (lag) | `ramp-C-memory-r50.json` |
+| C | memory | 100/s | 100.00/s | 20 s | 2,000 | none | none | 10 | 2.5 ms | withheld | no (lag) | `ramp-C-memory-r100.json` |
+| C | redis | 25/s | 25.03/s | 20 s | 500 | none | none | 3 | 8.5 ms | withheld | no (lag) | `ramp-C-redis-r25.json` |
+| C | redis | 50/s | 49.99/s | 20 s | 1,000 | none | none | 4 | 4.2 ms | withheld | no (lag) | `ramp-C-redis-r50.json` |
+| C | redis | 100/s | 100.01/s | 20 s | 2,000 | none | none | 9 | 1.9 ms | withheld | no (lag) | `ramp-C-redis-r100.json` |
+
+Read from the table:
+
+- B followed its target at 25/s (memory only) and at 50/s with both limiters. At 100/s and above it achieved
+  46.43 to 54.09/s, with peaks of 638 to 1,107 requests in flight at 100/s and 101 to 105 at 200/s and above.
+- Three B runs had transport errors: `ConnectError` in two runs at 100/s (14 and 111), and one `ReadError` at
+  200/s.
+- A followed 100/s, in both the 20 s and the 100 s run, and achieved 66.03/s against 200/s.
+- C followed 100/s with both limiters.
+
+40/s was chosen for the published runs as below B's ceiling. Why B stops near 50/s is not known from these runs;
+it is a Backlog item in [TASKS.md](TASKS.md).
+
+Two reports carry a suffix, and their fields alone do not say why they were made, so their purpose is not
+recorded:
+
+- `ramp-A-r100-full.json` is A at 100/s measured for 100 s (10,000 requests, so its lag p99 is not withheld).
+- `ramp-B-redis-r100-cpucheck.json` has the same settings as `ramp-B-redis-r100.json`.
+
 ## Not run, or not published
 
 | Item | Status | Reason |
 | --- | --- | --- |
-| The ramp (ADR-0018) | run, reports not committed | Separate 20 s runs at rising target rates, all invalid on the same lag rule, so a guide to the knee and not a published result. B followed its target at 25 and 50 requests/s and fell behind at 100 and above, where it achieved about 46 to 54/s (peaks of 638 to 1107 requests in flight at 100/s and about 101 to 105 at 200/s and above), with the memory limiter as well as with Redis, and three of these runs also had transport errors (a `ConnectError` count in two runs at 100/s, one `ReadError` at 200/s); A followed 100/s and not 200/s; C followed 100/s with both limiters. 40/s was chosen as below B's ceiling. The reports back no figure on this page, and the owner chose to leave them uncommitted (2026-11-25). The ceiling is a backlog item in [TASKS.md](TASKS.md). |
 | A valid run of any scenario | none obtained on this machine | The Windows timer floor fails the lag rule (above). The generator would have to run on Linux or WSL2. |
 | The Compose stack, on the owner's machine | not run | It routes only to the mock provider with the Redis limiter and does not contain the fake upstream, so it cannot run scenario B; the generator would still have run on Windows. CI's `container` job starts it. |
 
