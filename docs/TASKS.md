@@ -35,10 +35,11 @@ including T-506 above the plan threshold, and runs the localhost runs of T-502 a
       committed report or a recorded transcript, with its settings, and a figure from an invalid run is called
       invalid wherever it appears
 - [ ] The throughput ceiling's cause is stated only as far as T-502's recorded measurements show it; otherwise
-      it is "suspected, unconfirmed"
+      it is "suspected, unconfirmed", or "not reproduced" if T-502 found that it does not reproduce
 - [ ] The README's first screen states what Tollgate is and the three findings, with links to their sources,
       and neither the README nor ARCHITECTURE calls anything built "planned" or anything unbuilt "built"
-- [ ] Every edge in every diagram is backed by a line of code or of `compose.yaml`
+- [ ] Every edge in every diagram is backed by a line of code, `compose.yaml`, the `Dockerfile` or a file in
+      `deploy/`
 - [ ] No key, token or other secret appears in any committed file, transcript or screenshot
 - [ ] Every commit is authored by the owner, with no co-author trailers
 
@@ -2078,41 +2079,69 @@ below are in delivery order; the cards further down are listed by ID.
 
 - **Status:** todo
 - **Goal:** the ceiling of scenario B (about 46 to 54 requests/s against targets of 100 and above) is either
-  explained by recorded measurements, or stated as suspected and unconfirmed, with what was ruled out.
-- **Context:** ADR-0018; `docs/benchmarks.md` (the ramp section from T-501); the Backlog item.
+  explained by recorded measurements, or stated as suspected and unconfirmed, with what was ruled out, or shown
+  not to reproduce on the current commit.
+- **Context:** ADR-0018; `docs/benchmarks.md` (the ramp section from T-501); the Backlog item; "Running the
+  benchmarks" in `docs/setup.md`.
   - The provider client is built in `app/main.py` (`build_http_client`) with no `limits=`, so it uses httpx's
     default pool. That is a thing to measure, not an assumed cause.
   - Code: `app/providers/openai.py`, `run_route` and its attempts in `app/routing/`.
   - The request log's `attempts` field, and the metrics `tollgate_provider_attempt_duration_seconds` and
     `tollgate_http_request_duration_seconds`.
-  - Scripts: `scripts/fake_upstream.py`, `scripts/bench_load.py`.
+  - Scripts: `scripts/fake_upstream.py`, `scripts/bench_load.py`. No `app/`, `scripts/` or `deploy/` file has
+    changed since the ramp runs' commit `75384aa`, so runs on the current `main` are comparable with them.
 - **Depends on:** T-501.
-- **Timebox:** at most eight runs: the four in step 1, one in each of steps 2 and 3, and two variations. If
-  they end without a confirmed cause, the conclusion is "suspected, unconfirmed". That is an accepted outcome,
-  not a blocked task.
-- **Method:** standard library only, so no `py-spy` and no new dependency. Every run uses the settings
-  recorded in the matching committed ramp report (20 s measured, 5 s warm-up, the tokens per minute and capacity
-  recorded there, a 50 ms upstream delay), changing only the rate or the one variable under test. The note
-  lists each run's settings.
-  1. **Reproduce.** Run scenario B (memory limiter) at 50 and 100 requests/s on the current `main` commit,
-     with two controls at 100/s: scenario A (the upstream alone) and scenario C (memory limiter, no upstream).
-     If B now follows 100/s, record that and go straight to the conclusion.
-  2. **Locate the time.** During B at 100/s, scrape `/metrics` before and after, and keep the request log.
-     Compare the mean provider-attempt duration with the mean request duration, and both with the 50 ms
-     upstream delay. Compare each run's lag p50 and peak in flight from its report. Together these show
-     whether the time goes inside the attempt (the adapter, httpx and the upstream), around it in the gateway,
-     or in the generator.
-  3. **Profile.** Run B at 100/s once more with the gateway under `cProfile`, from a launcher kept outside the
-     repository. The note quotes the launcher in full, and records the top 20 functions by cumulative time.
+- **Definition of "follows":** a run follows its target when its achieved rate is at least 98% of the target,
+  its peak in flight is at most 50, and it has no transport error. The ramp baselines that followed: A at 100/s
+  (99.68/s, peak 13), C memory at 100/s (100.00/s, peak 10) and B memory at 50/s (49.88/s, peak 15). B memory
+  at 100/s did not (48.95/s, peak 1107, 14 `ConnectError`s).
+- **Timebox:** at most seven runs: the four in step 1, one in step 3 and two variations in step 4. If they end
+  without a confirmed cause, the conclusion is "suspected, unconfirmed". That is an accepted outcome, not a
+  blocked task.
+- **Settings:** standard library only, so no `py-spy` and no new dependency.
+  - Each step 1 run reproduces one ramp report with the values recorded there:
+    - B memory at 50 and 100/s (`ramp-B-memory-r50.json`, `ramp-B-memory-r100.json`)
+    - A at 100/s (`ramp-A-r100.json`, not the 100 s `ramp-A-r100-full.json`)
+    - C memory at 100/s (`ramp-C-memory-r100.json`)
+  - The shared values are 20 s measured, 5 s warm-up and no `--max-connections` cap. B and C use tokens per
+    minute and capacity of 276,000. B and A use a 50 ms upstream delay, and C has no upstream.
+  - At 100/s a 25 s run reserves 57,500 tokens from a full bucket of 276,000, so the limiter refuses nothing. A
+    variation that changes the rate rechecks this.
+  - Every gateway run (B and C, in every step) sets `TOLLGATE_METRICS_TOKEN` and `--log-config
+    deploy/logging.json` and sends stdout to a file outside the repository, never the console. The ramp runs of
+    2026-11-25 recorded neither setting. The section says so, since step 1's runs may differ from them in that
+    respect.
+  - A report's `git_commit` comes from `git rev-parse HEAD`, so it does not show a variation's diff. The section
+    quotes, for every run, the full commands for the fake upstream, the gateway (variable names, flags, log
+    config) and the generator. Each variation report is marked "commit field does not include the quoted diff".
+- **Method:**
+  1. **Reproduce.** Run the four step 1 runs on the current `main` commit. For the B and C runs at 100/s,
+     scrape `/metrics` before and after, and keep the request log. If B at 100/s follows its target, record that
+     and go straight to the conclusion.
+  2. **Locate the time.** No new run: use step 1's runs for three comparisons.
+     - (a) The provider-attempt duration against the request duration, both from the metrics and the log. This
+       is the time inside the attempt (the adapter, httpx and the upstream) against the time around it in the
+       app.
+     - (b) The gateway's request duration (histogram median or mean) against the report's latency p50. The gap
+       is time outside the app's timer: the generator after the hand-over, or uvicorn's accept and parse and
+       event-loop queueing before the timer starts. (b) alone cannot tell the generator from uvicorn.
+     - (c) Generator CPU seconds per measured second, lag max and peak in flight, against the A and C controls
+       at 100/s. Only these controls bound the generator, and only up to 100/s.
+  3. **Profile.** Run B at 100/s once more under `python -m cProfile -o <a path outside the repository> -m
+     uvicorn --factory app.main:create_app ...`, with the step 1 settings. This run is diagnostic and is not
+     compared with the others. Record the top 20 functions by `tottime` and by cumulative time. `cProfile` sees
+     only the main thread, so work in FastAPI's thread pool is not profiled, and the section says so.
   4. **Isolate.** Make at most two variations, each a single change applied to a scratch copy and never
-     committed, such as the client's pool limits or the generator's `--max-connections`. The note quotes each
-     diff. A variation confirms a cause only if B then follows a target it did not follow before, with every
-     other setting the same.
+     committed, such as the client's pool limits or the generator's `--max-connections`. The section quotes
+     each diff. A variation confirms a cause only if B at 100/s then follows its target, with every other
+     setting as in step 1.
 - **Deliverables:**
-  - `docs/benchmarks.md` gains a "Throughput ceiling investigation" section: each run with its settings and its
-    report; the metrics and log figures; the profile's top entries; each variation with its diff.
-  - The conclusion takes exactly one of two forms: "Cause: X, shown by run Y", or "Suspected, unconfirmed: X;
-    ruled out: ...".
+  - `docs/benchmarks.md` gains a "Throughput ceiling investigation" section: each run with its commands,
+    settings and report; the three comparisons; the profile's top entries; each variation with its diff.
+  - The conclusion takes exactly one of three forms:
+    - "Cause: X, shown by run Y"
+    - "Suspected, unconfirmed: X; ruled out: ..."
+    - "Not reproduced on commit <hash>: B followed 100/s in run <file>"
   - The reports, under `docs/benchmarks/` as `ceiling-*.json`.
   - The Backlog item is updated. A fix, if a cause is found, becomes a new Backlog item and is not part of this
     task. There is no `app/` change.
@@ -2123,14 +2152,17 @@ below are in delivery order; the cards further down are listed by ID.
 - **Acceptance criteria:**
   1. Every figure in the section matches a committed report, or a `/metrics` excerpt or log excerpt quoted in
      the section.
-  2. The conclusion uses one of the two forms, and a "Cause" names the variation run that shows it.
+  2. The conclusion uses one of the three forms. A "Cause" names the variation run that shows it, and every
+     "follows" uses the definition above.
   3. Each run is labelled valid or invalid under ADR-0018, as its report says.
-  4. There is no change in `app/` and no dependency, and the secret search is clean.
-  5. OWNER-CHECK: the owner confirms the wording of the conclusion.
+  4. Every run's commands are quoted in full, and every variation report is marked as such.
+  5. There is no change in `app/` and no dependency, and the secret search is clean.
+  6. OWNER-CHECK: the owner confirms the wording of the conclusion.
 - **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
 - **Branch and commits:** `docs/t-502-ceiling`; `docs(benchmarks): record the throughput ceiling
   investigation`, `docs(tasks): complete T-502`.
-- **Size:** about 150 lines plus the reports.
+- **Size:** about 180 lines plus the reports.
 
 ### T-503 - The findings write-up
 
@@ -2171,6 +2203,7 @@ below are in delivery order; the cards further down are listed by ID.
   3. Finding 3 uses T-502's conclusion form.
   4. No sentence claims more than its source. The reviewer's table gives a source for each claim.
 - **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
 - **Branch and commits:** `docs/t-503-findings`; `docs(findings): write up the cache, lag and ceiling
   findings`, `docs(tasks): complete T-503`.
 - **Size:** about 200 lines.
@@ -2195,17 +2228,20 @@ below are in delivery order; the cards further down are listed by ID.
     - logs on stdout
     - `/metrics` scraped by a Prometheus outside the repository, drawn dashed and labelled "outside the
       stack", backed by the `/metrics` route in `app/` rather than by `compose.yaml`
-  - **Component diagram** (Mermaid): the `app/` packages (`api`, `routing`, `providers`, `limits`, `cache`,
-    `observability`, `settings`, `clock`, `main`), with arrows in import direction.
+  - **Component diagram** (Mermaid): the six `app/` packages (`api`, `routing`, `providers`, `limits`,
+    `cache`, `observability`) and the three top-level modules (`settings`, `clock`, `main`), with arrows in
+    import direction.
   - Section 5's layout updated: `deploy/`, `Dockerfile`, `compose.yaml` and the benchmark scripts.
 - **Contract:** unchanged. No interface in section 3 changes. If one turns out wrong, stop and ask the owner:
   an interface change needs the owner's approval.
 - **Acceptance criteria:**
-  1. The verifier's table backs every diagram edge with a line of code or of `compose.yaml`.
-  2. Every import between `app/` packages appears as an edge in the component diagram.
+  1. The verifier's table backs every diagram edge with a line of code, `compose.yaml`, the `Dockerfile` or a
+     file in `deploy/`.
+  2. Every import between those packages and modules appears as an edge in the component diagram.
   3. No built part is labelled planned, and every part has a label.
   4. OWNER-CHECK: the diagrams render on the PR's GitHub page.
 - **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
 - **Branch and commits:** `docs/t-504-architecture`; `docs(architecture): add deployment and component
   diagrams`, `docs(tasks): complete T-504`.
 - **Size:** about 150 lines.
@@ -2226,7 +2262,8 @@ below are in delivery order; the cards further down are listed by ID.
        `x-ratelimit-*-tokens` headers
     3. no API key: 401
     4. a small bucket exhausted: 429 with `Retry-After` (the run sets a low `TOLLGATE_TOKENS_PER_MINUTE`, and the
-       page says so)
+       page says so). On the Compose stack the Redis bucket persists per key across runs, so this step uses a
+       fresh key.
     5. a `/metrics` excerpt after the run, saying how the lines were chosen
     6. the JSON log lines of those requests
     7. optional, only if a local Ollama runs: a cache miss and then a hit (`x-tollgate-cache`). The page states
@@ -2242,10 +2279,11 @@ below are in delivery order; the cards further down are listed by ID.
 - **Contract:** unchanged. No new script and no dependency.
 - **Acceptance criteria:**
   1. Every output block comes from the recorded run named in the header, and every elision is marked.
-  2. The verifier runs the same sequence against a local server with the mock and the route file named in the
-     page header. Status codes and header names (not their values) match the page.
+  2. The verifier replays the same sequence in-process (TestClient, the mock and the route file named in the
+     page header). Status codes and header names (not their values) match the page.
   3. No key or token value appears in any committed file or image.
 - **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
 - **Branch and commits:** `docs/t-505-demo`; `docs(demo): add the recorded text demo`,
   `docs(tasks): complete T-505`.
 - **Size:** about 200 lines, plus optional images.
@@ -2283,6 +2321,7 @@ below are in delivery order; the cards further down are listed by ID.
   4. Every relative link and anchor resolves.
   5. OWNER-CHECK: the owner reads the rendered README on the PR and approves it.
 - **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
 - **Branch and commits:** `docs/t-506-readme`; `docs(readme): rewrite the README to lead with the findings`,
   `docs(tasks): complete T-506`.
 - **Size:** a 258-line file rewritten to about 250 lines, about 450 changed lines. That is above the ~400-line
@@ -2307,6 +2346,7 @@ below are in delivery order; the cards further down are listed by ID.
   2. Every Backlog item left is still open.
   3. Every new Log row has exactly four cells (Python scan of unescaped pipes).
 - **Verification:** `python scripts/check.py` green. No test is added, so there is no mutation table.
+  `gh pr checks <n> --watch`.
 - **Branch and commits:** `docs/t-507-close-out`; `docs(tasks): close out Phase 5`.
 - **Size:** about 60 lines.
 
@@ -2485,3 +2525,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-25 | T-409 | Done. The owner's benchmark runs are recorded and the operations guide is written. Load: 15 runs (scenarios A, B and C, B and C each with the memory limiter and the Redis limiter, 3 repeats each) at 40 requests/s, 250 s measured after 10 s of warm-up, 10,000 measured requests each, on Windows 11 (Windows-11-10.0.26300-SP0, 16 CPUs, Python 3.13.2), with the generator and the server on the same machine; the fake upstream delay was 50 ms and the limiter's tokens per minute and capacity were both 110,400. Every run is invalid under ADR-0018's lag rule (lag p99 above 10% of latency p99): the lag p99 was 14.0 to 16.1 ms in all 15, consistent with the Windows timer tick of about 15.6 ms (not measured), and every other validity condition held (all 200, no transport errors). Latency p99 in ms: A 81.5 to 84.4, B memory 94.5 to 111.3, B Redis 120.1 to 145.8, C memory 25.8 to 29.1, C Redis 33.1 to 39.4. B minus A per repeat: memory p50 +2.5 to +3.7 ms and p99 +12.9 to +29.8 ms; Redis p50 +5.1 to +14.2 ms and p99 +38.5 to +64.2 ms. Cache scan (minimum per lookup): 8.0 ms at 1,000 entries of 384 dimensions, 2,136 ms at 100,000 entries of 1,024. Embedding latency: `all-minilm` on Ollama 0.40.18, 100 calls, median 14.81 ms, minimum 12.62 ms, maximum 47.35 ms. `docs/setup.md` gains running with Docker Compose, Metrics, Logs, running the benchmarks, and one process per container. A Backlog item records that scenario B did not follow targets of 100 requests/s and above in diagnostic runs. The contract is unchanged, and no dependency or test was added. OWNER-CHECK, confirmed in writing by the owner on 2026-11-25: all 15 load runs are published as invalid under the lag rule (Windows timer tick against the 10% limit). Ramp diagnostic files: not committed, per owner instruction (2026-11-25) to keep diagnostic ramp-* runs untracked since they back no published figure. Compose run: not run. Investigated and found Compose could not isolate the lag-rule question (the generator's own clock is the failure, not the gateway's platform) and would not cleanly test the throughput ceiling either; the owner accepted this reasoning and chose option 3 (publish at 40/s, report as invalid) instead, 2026-11-25 | `python scripts/check.py` passed just now (exit 0: ruff, format, mypy strict, contract, 2477 tests passed, 45 deselected); no test is added, so there is no mutation table; the OpenAPI snapshot is unchanged; a search of the committed files (`docs/benchmarks.md`, `docs/setup.md`, `docs/TASKS.md` and the 17 reports) for key patterns (`sk-`, `sk-ant-`, `AKIA`, `ghp_`, a Bearer value, an `api_key` value, the benchmark keys) found no key-shaped value; verifier, round one: every figure in `docs/benchmarks.md` recomputed from the committed reports with 0 mismatches, each load report names the OS, CPU count, Python version, same-machine flag and server, the setup guide's commands, variables, metric names, log fields and the series count (127 for one provider before any request) checked against the code; its one FAIL, the first wording of the Backlog item (figures with no committed source), was fixed by rewording it to what the ramp reports hold; reviewer, round one: CHANGES REQUIRED (the ramp row said B stopped following its target a little above 40/s, when it followed 50/s and fell behind at 100/s and above; the Backlog item's figures; the waivers; minor items on the setup guide and the embedding note), all fixed; reviewer, round two: APPROVE, with every number in `docs/benchmarks.md` recomputed again and four Minor items (the ramp row's in-flight peaks and transport errors, the Redis targets in the Backlog item, the Compose wording, and the settings row for A) fixed in this pull request; accepted: the Windows timer tick of about 15.6 ms is an external fact and not measured here, and the figures come from invalid runs |
 | 2026-11-26 | - | Phase 5 planned: cards T-501 to T-507, the Phase 5 gate and board rows; ADR-0019 (no published image and no hosted demo, amending ADR-0017) proposed. Owner decisions taken before planning: the 19 ramp reports are committed (reversing the 2026-11-25 choice); the throughput ceiling's suspected cause in the `openai` adapter was never recorded and is treated as unconfirmed, so T-502 profiles it with a timebox, and otherwise the write-up says "suspected, unconfirmed"; the demo is text only (curl output, `/metrics` text, JSON log lines), with no Prometheus or Grafana; there is no hosted demo. The Phase 4 gate is left for the owner's sign-off, with its README and ARCHITECTURE item delivered by T-504 and T-506. No research beyond ADR-0017's 2026-11-23 sources was needed; nothing was installed | `docs/TASKS.md`; `docs/DECISIONS.md`; the planning pull request |
 | 2026-11-26 | - | Decisions by the owner: ADR-0019 accepted as written, so ADR-0017's status is now "Accepted - amended by ADR-0019"; the Phase 5 card sizes approved, including T-506 at about 450 changed lines, a docs-only overrun; the owner runs the localhost runs of T-502 and T-505 by hand, as in T-409, from commands given at the start of each task; the Phase 4 gate signed off except "README and ARCHITECTURE describe what is built", which stays open and is carried into T-504 and T-506. A second review of the plan was requested, because T-502's scope and settings changed after the first | `docs/DECISIONS.md` (index and ADR headers); `docs/TASKS.md` (Phase 4 and Phase 5 gates) |
+| 2026-11-26 | - | Second plan review: CHANGES REQUIRED with 4 Major findings, all in T-502, and 9 Minor; all fixed. T-502 now defines "follows" (achieved rate at least 98% of the target, peak in flight at most 50, no transport error) from the ramp baselines; names the ramp report each run reproduces and its settings; runs every gateway with the metrics token and the JSON log config, sending stdout to a file, and says that the ramp runs recorded neither; locates the time with three comparisons (attempt against request duration, the app's timer against the generator's latency, generator CPU against the A and C controls), stating what each cannot separate; adds a third conclusion form, "not reproduced"; quotes every run's commands and marks variation reports; and records that `cProfile` sees only the main thread. Its run budget drops from eight to seven, because step 2 reuses step 1's runs. Minor: diagram edges may be backed by the `Dockerfile` or `deploy/`; the T-504 packages and modules named apart; T-505's check is an in-process replay, with a fresh key on the Compose stack; `gh pr checks` added to T-502 to T-507; ADR-0019 keeps its "Decision (proposed)" label, as accepted ADRs do | The planning pull request |
