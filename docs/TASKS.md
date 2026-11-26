@@ -19,7 +19,8 @@ recorded transcript. The write-up covers three findings:
 - Every load run at 40 requests/s on Windows failed ADR-0018's lag rule, with a lag p99 consistent with the
   Windows timer tick (an external figure, not measured here).
 - Through the `openai` adapter, the gateway fell behind targets of 100 requests/s and above, at about 46 to 54/s.
-  T-502 either records the cause with measurements or the write-up states it as suspected and unconfirmed.
+  T-502 either records the cause with measurements, or the write-up states it as suspected and unconfirmed, or
+  that it does not reproduce on the current commit.
 
 The demo is text: curl output, `/metrics` text and JSON log lines from one real local run, with optional
 screenshots. There is no hosted demo and no published image (ADR-0019), and no Prometheus or Grafana. There is
@@ -2095,8 +2096,8 @@ below are in delivery order; the cards further down are listed by ID.
   its peak in flight is at most 50, and it has no transport error. The ramp baselines that followed: A at 100/s
   (99.68/s, peak 13), C memory at 100/s (100.00/s, peak 10) and B memory at 50/s (49.88/s, peak 15). B memory
   at 100/s did not (48.95/s, peak 1107, 14 `ConnectError`s).
-- **Timebox:** at most seven runs: the four in step 1, one in step 3 and two variations in step 4. If they end
-  without a confirmed cause, the conclusion is "suspected, unconfirmed". That is an accepted outcome, not a
+- **Timebox:** at most seven runs: the four in step 1, one in step 3 and two variations in step 4. If B at 100/s
+  did not follow in step 1 and no variation confirms a cause, the conclusion is "suspected, unconfirmed". That is an accepted outcome, not a
   blocked task.
 - **Settings:** standard library only, so no `py-spy` and no new dependency.
   - Each step 1 run reproduces one ramp report with the values recorded there:
@@ -2117,20 +2118,28 @@ below are in delivery order; the cards further down are listed by ID.
 - **Method:**
   1. **Reproduce.** Run the four step 1 runs on the current `main` commit. For the B and C runs at 100/s,
      scrape `/metrics` before and after, and keep the request log. If B at 100/s follows its target, record that
-     and go straight to the conclusion.
+     and go straight to the conclusion. If A or C at 100/s does not follow, the section says so, comparison
+     (c) is not used, and no generator-side variation can support a "Cause".
   2. **Locate the time.** No new run: use step 1's runs for three comparisons.
      - (a) The provider-attempt duration against the request duration, both from the metrics and the log. This
        is the time inside the attempt (the adapter, httpx and the upstream) against the time around it in the
        app.
-     - (b) The gateway's request duration (histogram median or mean) against the report's latency p50. The gap
-       is time outside the app's timer: the generator after the hand-over, or uvicorn's accept and parse and
-       event-loop queueing before the timer starts. (b) alone cannot tell the generator from uvicorn.
-     - (c) Generator CPU seconds per measured second, lag max and peak in flight, against the A and C controls
-       at 100/s. Only these controls bound the generator, and only up to 100/s.
+     - (b) The median `duration_seconds` from the request log, over the measured window only (selected by
+       timestamp, so the warm-up is left out), against the report's latency p50. The histogram is only a
+       cross-check: its buckets are too coarse near 50 ms, and a before-and-after delta includes the warm-up.
+       The gap is time outside the app's timer: the generator's lag before the hand-over (the report's lag p50)
+       and its work after it, or uvicorn's accept and parse and event-loop queueing before the timer starts. (b)
+       alone cannot tell the generator from uvicorn.
+     - (c) Generator CPU per request (`generator_cpu_seconds / requests.total`, both in every report), lag max
+       and peak in flight, against the A and C controls at 100/s. In the ramp reports this was about 4.6 ms for
+       A, 4.8 ms for C and 14.4 ms for B at 100/s. Only these controls bound the generator, and only up to
+       100/s.
   3. **Profile.** Run B at 100/s once more under `python -m cProfile -o <a path outside the repository> -m
      uvicorn --factory app.main:create_app ...`, with the step 1 settings. This run is diagnostic and is not
      compared with the others. Record the top 20 functions by `tottime` and by cumulative time. `cProfile` sees
-     only the main thread, so work in FastAPI's thread pool is not profiled, and the section says so.
+     only the main thread, so work in FastAPI's thread pool is not profiled, and the section says so. `cProfile` writes its file only
+     when uvicorn exits normally, so the owner stops the server with Ctrl+C in a Windows console, not by killing
+     it, and the run counts only if the profile file exists and is not empty.
   4. **Isolate.** Make at most two variations, each a single change applied to a scratch copy and never
      committed, such as the client's pool limits or the generator's `--max-connections`. The section quotes
      each diff. A variation confirms a cause only if B at 100/s then follows its target, with every other
@@ -2526,3 +2535,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-26 | - | Phase 5 planned: cards T-501 to T-507, the Phase 5 gate and board rows; ADR-0019 (no published image and no hosted demo, amending ADR-0017) proposed. Owner decisions taken before planning: the 19 ramp reports are committed (reversing the 2026-11-25 choice); the throughput ceiling's suspected cause in the `openai` adapter was never recorded and is treated as unconfirmed, so T-502 profiles it with a timebox, and otherwise the write-up says "suspected, unconfirmed"; the demo is text only (curl output, `/metrics` text, JSON log lines), with no Prometheus or Grafana; there is no hosted demo. The Phase 4 gate is left for the owner's sign-off, with its README and ARCHITECTURE item delivered by T-504 and T-506. No research beyond ADR-0017's 2026-11-23 sources was needed; nothing was installed | `docs/TASKS.md`; `docs/DECISIONS.md`; the planning pull request |
 | 2026-11-26 | - | Decisions by the owner: ADR-0019 accepted as written, so ADR-0017's status is now "Accepted - amended by ADR-0019"; the Phase 5 card sizes approved, including T-506 at about 450 changed lines, a docs-only overrun; the owner runs the localhost runs of T-502 and T-505 by hand, as in T-409, from commands given at the start of each task; the Phase 4 gate signed off except "README and ARCHITECTURE describe what is built", which stays open and is carried into T-504 and T-506. A second review of the plan was requested, because T-502's scope and settings changed after the first | `docs/DECISIONS.md` (index and ADR headers); `docs/TASKS.md` (Phase 4 and Phase 5 gates) |
 | 2026-11-26 | - | Second plan review: CHANGES REQUIRED with 4 Major findings, all in T-502, and 9 Minor; all fixed. T-502 now defines "follows" (achieved rate at least 98% of the target, peak in flight at most 50, no transport error) from the ramp baselines; names the ramp report each run reproduces and its settings; runs every gateway with the metrics token and the JSON log config, sending stdout to a file, and says that the ramp runs recorded neither; locates the time with three comparisons (attempt against request duration, the app's timer against the generator's latency, generator CPU against the A and C controls), stating what each cannot separate; adds a third conclusion form, "not reproduced"; quotes every run's commands and marks variation reports; and records that `cProfile` sees only the main thread. Its run budget drops from eight to seven, because step 2 reuses step 1's runs. Minor: diagram edges may be backed by the `Dockerfile` or `deploy/`; the T-504 packages and modules named apart; T-505's check is an in-process replay, with a fresh key on the Compose stack; `gh pr checks` added to T-502 to T-507; ADR-0019 keeps its "Decision (proposed)" label, as accepted ADRs do | The planning pull request |
+| 2026-11-26 | - | Third plan review: APPROVE, with 7 Minor findings, all fixed in the planning pull request. T-502: the "suspected, unconfirmed" rule now applies only when B at 100/s did not follow and no variation confirms a cause; a failing A or C control voids comparison (c); comparison (b) uses the request log's median over the measured window, with the histogram as a cross-check, and its gap includes the generator's lag; comparison (c) uses generator CPU per request; the profile run counts only if Ctrl+C left a non-empty profile file. The Phase 5 intro names the "not reproduced" outcome | The planning pull request |
