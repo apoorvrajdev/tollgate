@@ -234,7 +234,7 @@ below are in delivery order; the cards further down are listed by ID.
 | T-408 | Cache scan and embedding latency benchmarks | 4 | done | T-407 |
 | T-409 | The owner's benchmark runs and the operations guide | 4 | done | T-405, T-407, T-408 |
 | T-501 | Commit the ramp reports | 5 | done | Phase 5 plan merged |
-| T-502 | Investigate the scenario B throughput ceiling | 5 | todo | T-501 |
+| T-502 | Investigate the scenario B throughput ceiling | 5 | in-progress | T-501 |
 | T-503 | The findings write-up | 5 | todo | T-502 |
 | T-504 | ARCHITECTURE refresh: deployment and component diagrams | 5 | todo | ADR-0019 accepted |
 | T-505 | The text demo | 5 | todo | ADR-0019 accepted |
@@ -2078,7 +2078,7 @@ below are in delivery order; the cards further down are listed by ID.
 
 ### T-502 - Investigate the scenario B throughput ceiling
 
-- **Status:** todo
+- **Status:** in-progress
 - **Goal:** the ceiling of scenario B (about 46 to 54 requests/s against targets of 100 and above) is either
   explained by recorded measurements, or stated as suspected and unconfirmed, with what was ruled out, or shown
   not to reproduce on the current commit.
@@ -2089,6 +2089,9 @@ below are in delivery order; the cards further down are listed by ID.
   - Code: `app/providers/openai.py`, `run_route` and its attempts in `app/routing/`.
   - The request log's `attempts` field, and the metrics `tollgate_provider_attempt_duration_seconds` and
     `tollgate_http_request_duration_seconds`.
+  - The owner's account of `ramp-B-redis-r100-cpucheck.json` (`docs/benchmarks.md`, 2026-11-26): during that
+    run the gateway was at 100% CPU and the generator at 44 to 67%, sampled by a method that was not
+    recorded. It points at the gateway process, but it is not in any report and is not a cause.
   - Scripts: `scripts/fake_upstream.py`, `scripts/bench_load.py`. No `app/`, `scripts/` or `deploy/` file has
     changed since the ramp runs' commit `75384aa`, so runs on the current `main` are comparable with them.
 - **Depends on:** T-501.
@@ -2112,6 +2115,11 @@ below are in delivery order; the cards further down are listed by ID.
     deploy/logging.json` and sends stdout to a file outside the repository, never the console. The ramp runs of
     2026-11-25 recorded neither setting. The section says so, since step 1's runs may differ from them in that
     respect.
+  - Every run samples the CPU time of the gateway and the fake upstream processes, each found by its
+    listening port, with Windows' own `netstat` and PowerShell `Get-Process` (no new dependency), just before
+    the generator starts and just after it ends. The section reports CPU seconds per request (over all
+    requests, warm-up included, like `generator_cpu_seconds / requests.total`) and CPU seconds per wall
+    second, and states the method. A sample that fails is recorded as "not sampled".
   - A report's `git_commit` comes from `git rev-parse HEAD`, so it does not show a variation's diff. The section
     quotes, for every run, the full commands for the fake upstream, the gateway (variable names, flags, log
     config) and the generator. Each variation report is marked "commit field does not include the quoted diff".
@@ -2131,7 +2139,8 @@ below are in delivery order; the cards further down are listed by ID.
        and its work after it, or uvicorn's accept and parse and event-loop queueing before the timer starts. (b)
        alone cannot tell the generator from uvicorn.
      - (c) Generator CPU per request (`generator_cpu_seconds / requests.total`, both in every report), lag max
-       and peak in flight, against the A and C controls at 100/s. In the ramp reports this was about 4.6 ms for
+       and peak in flight, against the A and C controls at 100/s, with the gateway's and the fake upstream's
+       CPU per request and per wall second beside them. In the ramp reports this was about 4.6 ms for
        A, 4.8 ms for C and 14.4 ms for B at 100/s. Only these controls bound the generator, and only up to
        100/s.
   3. **Profile.** Run B at 100/s once more under `python -m cProfile -o <a path outside the repository> -m
@@ -2150,7 +2159,7 @@ below are in delivery order; the cards further down are listed by ID.
   - The conclusion takes exactly one of three forms:
     - "Cause: X, shown by run Y"
     - "Suspected, unconfirmed: X; ruled out: ..."
-    - "Not reproduced on commit <hash>: B followed 100/s in run <file>"
+    - "Not reproduced on commit `<hash>`: B followed 100/s in run `<file>`"
   - The reports, under `docs/benchmarks/` as `ceiling-*.json`.
   - The Backlog item is updated. A fix, if a cause is found, becomes a new Backlog item and is not part of this
     task. There is no `app/` change.
