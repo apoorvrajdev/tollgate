@@ -24,12 +24,13 @@ recorded transcript. The write-up covers three findings:
 The demo is text: curl output, `/metrics` text and JSON log lines from one real local run, with optional
 screenshots. There is no hosted demo and no published image (ADR-0019), and no Prometheus or Grafana. There is
 no new dependency, no new image and no `app/` change. The contract is unchanged. Planned 2026-11-26;
-ADR-0019 proposed.
+ADR-0019 was accepted by the owner as written the same day. The owner also approved the card sizes,
+including T-506 above the plan threshold, and runs the localhost runs of T-502 and T-505 by hand, as in T-409.
 
 **Gate (owner signs off):**
 
 - [ ] Every Phase 5 task is `done`, and `python scripts/check.py` is green locally and in CI
-- [ ] ADR-0019 accepted or revised, and ADR-0017's status line names it
+- [x] ADR-0019 accepted or revised, and ADR-0017's status line names it (accepted as written 2026-11-26)
 - [ ] Every figure in the README, `docs/findings.md`, `docs/benchmarks.md` and `docs/demo.md` comes from a
       committed report or a recorded transcript, with its settings, and a figure from an invalid run is called
       invalid wherever it appears
@@ -41,10 +42,10 @@ ADR-0019 proposed.
 - [ ] No key, token or other secret appears in any committed file, transcript or screenshot
 - [ ] Every commit is authored by the owner, with no co-author trailers
 
-## Phase 4 - Operations (tasks done; gate awaiting the owner's sign-off)
+## Phase 4 - Operations (complete; one gate item carried to Phase 5)
 
-All nine tasks are done. The gate item "README and ARCHITECTURE describe what is built" is delivered in Phase 5
-by T-504 and T-506. The owner signs off the other items when approving the Phase 5 plan, or says which stay open.
+All nine tasks are done. The owner signed off the gate on 2026-11-26, except the item "README and ARCHITECTURE
+describe what is built", which stays open and is delivered in Phase 5 by T-504 and T-506.
 
 Every request writes one JSON log line built only from bounded fields, and `/metrics`, behind a token of its
 own, exports Prometheus metrics written with the standard library. These include the settle cap, the reply size
@@ -56,28 +57,29 @@ Every figure comes from the owner's recorded runs. No new dependency. Planned 20
 were accepted by the owner as written the same day, and ADR-0018 with one added line on the lag threshold.
 The owner also approved the card sizes, including the five above the plan threshold.
 
-**Gate (owner signs off):**
+**Gate (signed off by the owner, 2026-11-26, except the README and ARCHITECTURE item, carried to T-504 and
+T-506):**
 
-- [ ] Every Phase 4 task is `done`, and `python scripts/check.py` is green locally and in CI
+- [x] Every Phase 4 task is `done`, and `python scripts/check.py` is green locally and in CI
 - [x] ADR-0016, ADR-0017 and ADR-0018 accepted or revised, the status lines of ADR-0013 and ADR-0014 updated
       to name ADR-0016, and ADR-0006's to name ADR-0017 (accepted 2026-11-23)
-- [ ] Durations come from the injected monotonic clock, never the wall clock, and tests use a fake
-- [ ] Every request writes one JSON log line holding only the ADR-0016 fields, and a test proves that no prompt,
+- [x] Durations come from the injected monotonic clock, never the wall clock, and tests use a fake
+- [x] Every request writes one JSON log line holding only the ADR-0016 fields, and a test proves that no prompt,
       model, API key, key digest, caller id, header value or query string reaches the log
-- [ ] `/metrics` exists only when a metrics token is set, refuses API keys, is absent from the OpenAPI document,
+- [x] `/metrics` exists only when a metrics token is set, refuses API keys, is absent from the OpenAPI document,
       and exports the ADR-0016 metric set, including the settle cap, the reply size cap and the embedder failures
-- [ ] The image builds from a digest-pinned base, runs as a non-root user and holds only the app and its
+- [x] The image builds from a digest-pinned base, runs as a non-root user and holds only the app and its
       dependencies, and the CI job `container` starts the Compose stack and passes its smoke checks on `main`
-- [ ] The deployment target is the one ADR-0017 records
-- [ ] Every figure in the README or `docs/benchmarks.md` comes from a recorded run with its settings, including
+- [x] The deployment target is the one ADR-0017 records
+- [x] Every figure in the README or `docs/benchmarks.md` comes from a recorded run with its settings, including
       where the generator ran, and a run that fails the validity check is reported as invalid; or the owner
       waives a run in writing
-- [ ] Tests use no network and no paid API. The exceptions are the CI Redis container (ADR-0006) and, in the
+- [x] Tests use no network and no paid API. The exceptions are the CI Redis container (ADR-0006) and, in the
       `container` job only, the image and wheel downloads and the localhost traffic to its own Compose stack
       (ADR-0017)
-- [ ] Every Phase 4 task that adds tests has a mutation table with no unexplained survivor
+- [x] Every Phase 4 task that adds tests has a mutation table with no unexplained survivor
 - [ ] README and ARCHITECTURE describe what is built, and every claim comes from a recorded run
-- [ ] Every commit is authored by the owner, with no co-author trailers
+- [x] Every commit is authored by the owner, with no co-author trailers
 
 ## Phase 3 - Semantic caching (complete)
 
@@ -2114,8 +2116,9 @@ below are in delivery order; the cards further down are listed by ID.
   - The reports, under `docs/benchmarks/` as `ceiling-*.json`.
   - The Backlog item is updated. A fix, if a cause is found, becomes a new Backlog item and is not part of this
     task. There is no `app/` change.
-  - OWNER-CHECK: the runs use only localhost (the gateway, the fake upstream and the generator). The owner
-    runs them, or approves running them on localhost, before the task starts.
+  - OWNER-CHECK: the owner runs them by hand, as in T-409 (decided 2026-11-26). They use only localhost (the
+    gateway, the fake upstream and the generator). The task starts by giving the owner the exact commands for
+    each run, with every setting.
 - **Contract:** unchanged.
 - **Acceptance criteria:**
   1. Every figure in the section matches a committed report, or a `/metrics` excerpt or log excerpt quoted in
@@ -2234,7 +2237,8 @@ below are in delivery order; the cards further down are listed by ID.
     by eye for secrets.
   - No unknown-model 404 step: both mock route files (`deploy/routes.compose.json` and
     `deploy/bench/routes.mock.json`) have a `default` route, so any model name returns a 200 (`docs/setup.md`).
-  - OWNER-CHECK: the owner runs the sequence, or approves running it on localhost, before the task starts.
+  - OWNER-CHECK: the owner runs the sequence by hand on localhost, as in T-409 (decided 2026-11-26). The task
+    starts by giving the owner the exact commands.
 - **Contract:** unchanged. No new script and no dependency.
 - **Acceptance criteria:**
   1. Every output block comes from the recorded run named in the header, and every elision is marked.
@@ -2480,3 +2484,4 @@ Not scheduled. Each item becomes a task card when a phase is planned.
 | 2026-11-25 | T-408 | Done. `python scripts/bench_cache.py` has two modes. `scan` fills one partition of an `InMemorySemanticCache` with N seeded unit vectors of D dimensions for each combination of `--entries` and `--dimensions` (several values each; the defaults are ADR-0018's grid of 1,000, 10,000 and 100,000 by 384 and 1,024, owner decision), and times `lookup` with `timeit.Timer(...).repeat(number=1)` at a similarity threshold of 2.0 that no entry reaches, so every lookup scans every entry and misses; it reports the minimum, median and maximum per lookup. Each timed lookup is run to completion directly inside a running event loop (owner decision), and a lookup that pauses on an await stops the run at run time with a fixed error, exit 1 and no report (owner requirement). A combination whose vectors (entries x dimensions x 8 bytes) exceed `--max-vector-bytes` (default 1 GiB, chosen) is skipped and reported as skipped; only one combination's cache is held at a time. Seeds are non-negative, because `random.Random` seeds with an int's absolute value. `embed` builds the gateway's `OllamaEmbedder`, records the Ollama version with `fetch_ollama_version`, discards one call and times `--calls` sequential calls (default 100); an `EmbeddingError` stops the run with its kind-and-status message and no figure, and the URL is never printed or written. Both modes write a Markdown report and, with `--output` (added, owner decision), a JSON report with their settings, the git commit, Python version, OS and CPU count. `Parser` and `positive_int` in `scripts/bench_load.py` are now public and shared with `bench_cache.py` (owner request), which also imports `ScriptError` and `fetch_ollama_version` from `scripts/eval_cache.py`. No figure is published here: the owner's runs are T-409. Size about 1,290 changed lines against the card's ~400 (the owner approved ~900, and was told of the overrun). Review round one found that the previous combination's cache stayed alive during the next fill, so peak vector memory could pass the limit; fixed. | `scripts/bench_cache.py`, `tests/test_bench_cache.py`, `scripts/bench_load.py`, `docs/ARCHITECTURE.md`; `scripts/check.py` 2477 passed; mutation table 34 of 34 caught after one kill test was added for a removed `coroutine.close()` (a threshold of 0.0 or -2.0 that lets entries hit, each entry in its own partition, the fill stopped one short, the discarded call kept, minimum and median swapped, `>=` in the memory guard, an `EmbeddingError` swallowed on the discarded call, mid-run or in the runner, the previous cache kept alive, the pause guard returning None or another message, `close()` removed, the miss check removed or neutered, the fill check removed with one entry fewer allowed, `number=repeats` or one repeat too many, `median_low`, 4 bytes per value, `break` after a skip, normalising dropped, the query drawn after the entries, the default seed or limit passed instead of the given one, another default URL, the URL in the report, a report written after a failure, the version fetch removed, one timer start for every call, a negative seed accepted or zero rejected) |
 | 2026-11-25 | T-409 | Done. The owner's benchmark runs are recorded and the operations guide is written. Load: 15 runs (scenarios A, B and C, B and C each with the memory limiter and the Redis limiter, 3 repeats each) at 40 requests/s, 250 s measured after 10 s of warm-up, 10,000 measured requests each, on Windows 11 (Windows-11-10.0.26300-SP0, 16 CPUs, Python 3.13.2), with the generator and the server on the same machine; the fake upstream delay was 50 ms and the limiter's tokens per minute and capacity were both 110,400. Every run is invalid under ADR-0018's lag rule (lag p99 above 10% of latency p99): the lag p99 was 14.0 to 16.1 ms in all 15, consistent with the Windows timer tick of about 15.6 ms (not measured), and every other validity condition held (all 200, no transport errors). Latency p99 in ms: A 81.5 to 84.4, B memory 94.5 to 111.3, B Redis 120.1 to 145.8, C memory 25.8 to 29.1, C Redis 33.1 to 39.4. B minus A per repeat: memory p50 +2.5 to +3.7 ms and p99 +12.9 to +29.8 ms; Redis p50 +5.1 to +14.2 ms and p99 +38.5 to +64.2 ms. Cache scan (minimum per lookup): 8.0 ms at 1,000 entries of 384 dimensions, 2,136 ms at 100,000 entries of 1,024. Embedding latency: `all-minilm` on Ollama 0.40.18, 100 calls, median 14.81 ms, minimum 12.62 ms, maximum 47.35 ms. `docs/setup.md` gains running with Docker Compose, Metrics, Logs, running the benchmarks, and one process per container. A Backlog item records that scenario B did not follow targets of 100 requests/s and above in diagnostic runs. The contract is unchanged, and no dependency or test was added. OWNER-CHECK, confirmed in writing by the owner on 2026-11-25: all 15 load runs are published as invalid under the lag rule (Windows timer tick against the 10% limit). Ramp diagnostic files: not committed, per owner instruction (2026-11-25) to keep diagnostic ramp-* runs untracked since they back no published figure. Compose run: not run. Investigated and found Compose could not isolate the lag-rule question (the generator's own clock is the failure, not the gateway's platform) and would not cleanly test the throughput ceiling either; the owner accepted this reasoning and chose option 3 (publish at 40/s, report as invalid) instead, 2026-11-25 | `python scripts/check.py` passed just now (exit 0: ruff, format, mypy strict, contract, 2477 tests passed, 45 deselected); no test is added, so there is no mutation table; the OpenAPI snapshot is unchanged; a search of the committed files (`docs/benchmarks.md`, `docs/setup.md`, `docs/TASKS.md` and the 17 reports) for key patterns (`sk-`, `sk-ant-`, `AKIA`, `ghp_`, a Bearer value, an `api_key` value, the benchmark keys) found no key-shaped value; verifier, round one: every figure in `docs/benchmarks.md` recomputed from the committed reports with 0 mismatches, each load report names the OS, CPU count, Python version, same-machine flag and server, the setup guide's commands, variables, metric names, log fields and the series count (127 for one provider before any request) checked against the code; its one FAIL, the first wording of the Backlog item (figures with no committed source), was fixed by rewording it to what the ramp reports hold; reviewer, round one: CHANGES REQUIRED (the ramp row said B stopped following its target a little above 40/s, when it followed 50/s and fell behind at 100/s and above; the Backlog item's figures; the waivers; minor items on the setup guide and the embedding note), all fixed; reviewer, round two: APPROVE, with every number in `docs/benchmarks.md` recomputed again and four Minor items (the ramp row's in-flight peaks and transport errors, the Redis targets in the Backlog item, the Compose wording, and the settings row for A) fixed in this pull request; accepted: the Windows timer tick of about 15.6 ms is an external fact and not measured here, and the figures come from invalid runs |
 | 2026-11-26 | - | Phase 5 planned: cards T-501 to T-507, the Phase 5 gate and board rows; ADR-0019 (no published image and no hosted demo, amending ADR-0017) proposed. Owner decisions taken before planning: the 19 ramp reports are committed (reversing the 2026-11-25 choice); the throughput ceiling's suspected cause in the `openai` adapter was never recorded and is treated as unconfirmed, so T-502 profiles it with a timebox, and otherwise the write-up says "suspected, unconfirmed"; the demo is text only (curl output, `/metrics` text, JSON log lines), with no Prometheus or Grafana; there is no hosted demo. The Phase 4 gate is left for the owner's sign-off, with its README and ARCHITECTURE item delivered by T-504 and T-506. No research beyond ADR-0017's 2026-11-23 sources was needed; nothing was installed | `docs/TASKS.md`; `docs/DECISIONS.md`; the planning pull request |
+| 2026-11-26 | - | Decisions by the owner: ADR-0019 accepted as written, so ADR-0017's status is now "Accepted - amended by ADR-0019"; the Phase 5 card sizes approved, including T-506 at about 450 changed lines, a docs-only overrun; the owner runs the localhost runs of T-502 and T-505 by hand, as in T-409, from commands given at the start of each task; the Phase 4 gate signed off except "README and ARCHITECTURE describe what is built", which stays open and is carried into T-504 and T-506. A second review of the plan was requested, because T-502's scope and settings changed after the first | `docs/DECISIONS.md` (index and ADR headers); `docs/TASKS.md` (Phase 4 and Phase 5 gates) |
