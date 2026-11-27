@@ -1,0 +1,56 @@
+{
+  "valid": false,
+  "invalid_reasons": [
+    "lag p99 above 10% of latency p99"
+  ],
+  "requests": {
+    "total": 2500,
+    "warmup": 500,
+    "measured": 2000
+  },
+  "errors": {
+    "by_status": {},
+    "transport": {}
+  },
+  "warmup_errors": {
+    "by_status": {},
+    "transport": {}
+  },
+  "latency_seconds": {
+    "p50": 0.07534765000002608,
+    "p95": 0.11673762000002626,
+    "p99": null,
+    "max": 0.16708380000000034
+  },
+  "lag_seconds": {
+    "p50": 0.003180750000012722,
+    "p99": null,
+    "max": 0.01643520000004628
+  },
+  "p99_withheld": "too few samples",
+  "quantile_method": "statistics.quantiles(n=100, method=\"inclusive\")",
+  "achieved_rate_per_second": 99.66306012296688,
+  "achieved_rate_formula": "measured requests / (last measured end - first measured due)",
+  "peak_in_flight": 17,
+  "generator_cpu_seconds": 10.625,
+  "settings": {
+    "scenario": "B",
+    "rate_per_second": 100,
+    "duration_seconds": 20,
+    "warmup_seconds": 5,
+    "max_connections": null,
+    "limiter": "memory",
+    "tokens_per_minute": 276000,
+    "capacity_tokens": 276000,
+    "routes_sha256_lf": "4cb1056bbcb0dbbb4135369269d5ac2bd93acac3e8750b78a9bb562180dd71b2",
+    "upstream_delay_ms": 50,
+    "server": "uvicorn",
+    "request_body_bytes": 79,
+    "request_body_sha256": "6a4d2343e3df5c4e0bcd26e7ef31f09c15091659e673995321c939a9da807efd",
+    "git_commit": "e280d37018b5fe4ff8a8fae985b66066f9b30eb3",
+    "python_version": "3.13.2",
+    "os": "Windows-11-10.0.26300-SP0",
+    "cpu_count": 16,
+    "same_machine": true
+  }
+}
