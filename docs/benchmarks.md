@@ -10,7 +10,8 @@ most 10% of the latency p99. Every run here fails that one rule, and every repor
 as invalid runs and not tuned until they pass. Everything else about them is clean: 10,000 measured requests
 each, all 200, no transport error, no warm-up error. The cache scan and the embedding latency have no validity
 rule and are measured runs. The 19 ramp runs, in their own section, are diagnostic and all invalid as well,
-three of them also for transport errors.
+three of them also for transport errors. The four runs in "Throughput ceiling investigation" are diagnostic and
+invalid as well, under the lag rule only.
 
 ## Platform and settings
 
@@ -180,8 +181,9 @@ Read from the table:
 - A followed 100/s, in both the 20 s and the 100 s run, and achieved 66.03/s against 200/s.
 - C followed 100/s with both limiters.
 
-40/s was chosen for the published runs as below B's ceiling. Why B stops near 50/s is not known from these runs;
-it is a Backlog item in [TASKS.md](TASKS.md).
+40/s was chosen for the published runs as below B's ceiling. Why B stops near 50/s is not known from these runs.
+The memory-limiter case did not reproduce on a later commit, as shown in "Throughput ceiling investigation" below.
+The rest is a Backlog item in [TASKS.md](TASKS.md).
 
 Two reports carry a suffix. Their fields do not say why they were made; the purposes below are the owner's
 account (2026-11-26):
@@ -192,7 +194,190 @@ account (2026-11-26):
   `ramp-B-redis-r100.json`, while the CPU use of each process was sampled. The owner reports the gateway at 100%
   CPU and the generator at 44 to 67%. Those figures are not in the report, and how they were sampled (the tool,
   the interval, and whether 100% means one core) was not recorded, so they are an observation, not a measurement
-  this page can reproduce. They do not by themselves establish the cause of B's ceiling; T-502 investigates it.
+  this page can reproduce. They do not by themselves establish the cause of B's ceiling. T-502 investigated it:
+  see "Throughput ceiling investigation" below.
+
+## Throughput ceiling investigation
+
+**Conclusion: not reproduced on commit `e280d37`: B followed 100/s in run `ceiling-B-memory-r100.json`.**
+
+The ramp runs above showed scenario B stopping near 50 requests/s against targets of 100/s and above. T-502
+re-ran four of them on 2026-11-27 on `main` at `e280d37018b5fe4ff8a8fae985b66066f9b30eb3`. No `app/`,
+`scripts/` or `deploy/` file changed between the ramp runs' commit `75384aa` and `e280d37`. B with the
+memory limiter followed 100/s, so the investigation stopped after its first step, as the task allows. The
+diagnostic profile and the two variations were not run, and no cause is claimed. The cause of the earlier
+ceiling is unknown.
+
+A run **follows** its target when it achieves at least 98% of the target rate, its peak in flight is at most 50,
+and it has no transport error. All four runs are diagnostic and invalid under ADR-0018 for the same reason as every
+other run on this page: the lag rule. Every report's `errors.by_status` is empty, so the limiter refused nothing.
+The generator exited with code 3 (a report was written, and the run is invalid) in all four.
+
+| Scenario | Limiter | Target | Achieved | Requests measured | Non-200 | Transport errors | Peak in flight | Latency p50 | Lag p50 | Follows | Valid | Report |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| B | memory | 50/s | 49.86/s | 1,000 | none | none | 21 | 72.8 ms | 5.7 ms | yes | no (lag) | `ceiling-B-memory-r50.json` |
+| B | memory | 100/s | 99.66/s | 2,000 | none | none | 17 | 75.3 ms | 3.2 ms | yes | no (lag) | `ceiling-B-memory-r100.json` |
+| A | - | 100/s | 99.72/s | 2,000 | none | none | 12 | 71.1 ms | 4.7 ms | yes | no (lag) | `ceiling-A-r100.json` |
+| C | memory | 100/s | 100.01/s | 2,000 | none | none | 11 | 9.7 ms | 2.6 ms | yes | no (lag) | `ceiling-C-memory-r100.json` |
+
+### Settings
+
+Each run repeats one ramp report's recorded settings. Every field of each report's `settings` matches its ramp
+report's except `git_commit`:
+
+- 20 s measured after 5 s of warm-up
+- no connection cap
+- the request of the tables above
+- a 50 ms fake upstream delay in A and B
+- tokens per minute and capacity of 276,000 for B and C
+- B used `deploy/bench/routes.fake-upstream.json` and C used `deploy/bench/routes.mock.json`
+
+At 100/s a run sends 2,500 requests, warm-up included. The gateway's `/metrics` shows 57,500 tokens reserved
+(below), well inside the bucket of 276,000.
+
+**What differs from the ramp runs.** Every gateway run here set `TOLLGATE_METRICS_TOKEN`, used `--log-config
+deploy/logging.json`, and sent stdout and stderr to a file outside the repository. The ramp runs of 2026-11-25
+recorded none of these, so how their gateway logged, and where, is not known. This is a difference between the two
+sets of runs. It is not shown to be the cause: no run here changed one of these settings alone.
+
+Other ramp runs are not covered. B with the Redis limiter at 100/s, and B at 200/s and above, were not re-run.
+
+### Commands
+
+These are run from the repository root in Git Bash. There were three shells: the fake upstream, the gateway and
+the generator. Each first ran `source ~/tollgate-t502/env.sh`, and the generator's shell then ran
+`source ~/tollgate-t502/t502.sh`. `env.sh` exports `BENCH_GATEWAY_KEY`, `TOLLGATE_API_KEYS`,
+`TOLLGATE_METRICS_TOKEN`, `TOLLGATE_BENCH_UPSTREAM_KEY` and `OUT`. It holds throwaway local keys, and its values
+are not published. `run` is a shell function. It samples CPU, scrapes `/metrics` (`curl` with the metrics token),
+runs `.venv/Scripts/python scripts/bench_load.py` with the arguments that follow the label, then samples and
+scrapes again.
+
+The fake upstream ran unchanged through all four runs:
+
+```bash
+.venv/Scripts/python scripts/fake_upstream.py --delay-ms 50
+```
+
+The gateway for B. A fresh process was started for each B run, first for 50/s, then for 100/s:
+
+```bash
+TOLLGATE_ROUTES_FILE=deploy/bench/routes.fake-upstream.json TOLLGATE_TOKENS_PER_MINUTE=276000 TOLLGATE_CAPACITY_TOKENS=276000 TOLLGATE_LIMITER_BACKEND=memory \
+  .venv/Scripts/python -m uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8001 --no-access-log --log-config deploy/logging.json > ~/tollgate-t502/B-memory-r50.log 2>&1
+TOLLGATE_ROUTES_FILE=deploy/bench/routes.fake-upstream.json TOLLGATE_TOKENS_PER_MINUTE=276000 TOLLGATE_CAPACITY_TOKENS=276000 TOLLGATE_LIMITER_BACKEND=memory \
+  .venv/Scripts/python -m uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8001 --no-access-log --log-config deploy/logging.json > ~/tollgate-t502/B-memory-r100.log 2>&1
+```
+
+The gateway for C:
+
+```bash
+TOLLGATE_ROUTES_FILE=deploy/bench/routes.mock.json TOLLGATE_TOKENS_PER_MINUTE=276000 TOLLGATE_CAPACITY_TOKENS=276000 TOLLGATE_LIMITER_BACKEND=memory \
+  .venv/Scripts/python -m uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8001 --no-access-log --log-config deploy/logging.json > ~/tollgate-t502/C-memory-r100.log 2>&1
+```
+
+The generator. No gateway was running during the A run:
+
+```bash
+run B-memory-r50 --url http://127.0.0.1:8001 --api-key-env BENCH_GATEWAY_KEY --rate 50 --duration-seconds 20 --warmup-seconds 5 --scenario B --limiter memory --tokens-per-minute 276000 --capacity-tokens 276000 --routes-file deploy/bench/routes.fake-upstream.json --upstream-delay-ms 50 --server uvicorn --same-machine --output docs/benchmarks/ceiling-B-memory-r50.json
+run B-memory-r100 --url http://127.0.0.1:8001 --api-key-env BENCH_GATEWAY_KEY --rate 100 --duration-seconds 20 --warmup-seconds 5 --scenario B --limiter memory --tokens-per-minute 276000 --capacity-tokens 276000 --routes-file deploy/bench/routes.fake-upstream.json --upstream-delay-ms 50 --server uvicorn --same-machine --output docs/benchmarks/ceiling-B-memory-r100.json
+run A-r100 --url http://127.0.0.1:8100 --rate 100 --duration-seconds 20 --warmup-seconds 5 --scenario A --upstream-delay-ms 50 --same-machine --output docs/benchmarks/ceiling-A-r100.json
+run C-memory-r100 --url http://127.0.0.1:8001 --api-key-env BENCH_GATEWAY_KEY --rate 100 --duration-seconds 20 --warmup-seconds 5 --scenario C --limiter memory --tokens-per-minute 276000 --capacity-tokens 276000 --routes-file deploy/bench/routes.mock.json --server uvicorn --same-machine --output docs/benchmarks/ceiling-C-memory-r100.json
+```
+
+### Against the ramp runs
+
+Generator CPU per request is the report's `generator_cpu_seconds / requests.total`, with warm-up included.
+
+| Scenario | Limiter | Target | Ramp achieved | Ramp peak | Ramp generator CPU per request | Ceiling achieved | Ceiling peak | Ceiling generator CPU per request |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| B | memory | 50/s | 49.88/s | 15 | 4.15 ms | 49.86/s | 21 | 5.30 ms |
+| B | memory | 100/s | 48.95/s | 1,107 | 14.39 ms | 99.66/s | 17 | 4.25 ms |
+| A | - | 100/s | 99.68/s | 13 | 4.58 ms | 99.72/s | 12 | 4.03 ms |
+| C | memory | 100/s | 100.00/s | 10 | 4.77 ms | 100.01/s | 11 | 3.45 ms |
+
+The B run at 100/s, which had stood out at 14.39 ms per request, now uses about as much generator CPU per request
+as the A and C controls. This is an observation, not a cause.
+
+### Gateway and upstream CPU
+
+The method: `run` found each process by its listening port (`netstat -ano`, the gateway on 8001 and the fake upstream
+on 8100). It read `TotalProcessorTime` with PowerShell `Get-Process` just before the generator started and just after
+it ended. "Wall" is the time between the two samples' own timestamps. Per request divides by the report's
+`requests.total`, warm-up included. A CPU per wall second of 1.00 is one core fully busy. The raw samples are
+quoted below the table.
+
+| Run | Process | CPU before (s) | CPU after (s) | CPU used (s) | Wall between samples (s) | CPU per wall second | Requests | CPU per request |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `B-memory-r50` | gateway | 1.047 | 11.656 | 10.609 | 28.4 | 0.37 | 1,250 | 8.49 ms |
+| `B-memory-r50` | upstream | 0.563 | 1.547 | 0.984 | 28.1 | 0.03 | 1,250 | 0.79 ms |
+| `B-memory-r100` | gateway | 1.125 | 17.641 | 16.516 | 27.4 | 0.60 | 2,500 | 6.61 ms |
+| `B-memory-r100` | upstream | 1.688 | 3.250 | 1.562 | 27.7 | 0.06 | 2,500 | 0.62 ms |
+| `A-r100` | gateway | not sampled | not sampled | - | - | - | - | - |
+| `A-r100` | upstream | 3.297 | 4.938 | 1.641 | 26.7 | 0.06 | 2,500 | 0.66 ms |
+| `C-memory-r100` | gateway | 0.781 | 6.328 | 5.547 | 27.0 | 0.21 | 2,500 | 2.22 ms |
+| `C-memory-r100` | upstream | 4.969 | 5.031 | 0.062 | 27.0 | 0.00 | 2,500 | n/a (no requests reach it) |
+
+The gateway was not sampled in A because A has no gateway, and nothing listened on port 8001. The fake upstream
+stayed running during C but received no requests. In B at 100/s the gateway used 0.60 CPU seconds per wall second.
+The owner's earlier account of the gateway at 100% CPU came from a different run (B with Redis at 100/s), with an
+unrecorded method, so these figures neither confirm nor contradict it.
+
+The raw samples (`cpu.txt`):
+
+```text
+B-memory-r50-before gateway pid=23172 2026-11-27T21:38:20.5548354+05:30 1.047
+B-memory-r50-before upstream pid=10300 2026-11-27T21:38:21.3243553+05:30 0.563
+B-memory-r50-after gateway pid=23172 2026-11-27T21:38:48.9310216+05:30 11.656
+B-memory-r50-after upstream pid=10300 2026-11-27T21:38:49.4574100+05:30 1.547
+B-memory-r100-before gateway pid=11648 2026-11-27T21:40:27.3620200+05:30 1.125
+B-memory-r100-before upstream pid=10300 2026-11-27T21:40:27.8699193+05:30 1.688
+B-memory-r100-after gateway pid=11648 2026-11-27T21:40:54.7399040+05:30 17.641
+B-memory-r100-after upstream pid=10300 2026-11-27T21:40:55.5548407+05:30 3.250
+A-r100-before gateway not-sampled (no listener on port 8001)
+A-r100-before upstream pid=10300 2026-11-27T21:42:11.5220455+05:30 3.297
+A-r100-after gateway not-sampled (no listener on port 8001)
+A-r100-after upstream pid=10300 2026-11-27T21:42:38.1813470+05:30 4.938
+C-memory-r100-before gateway pid=5940 2026-11-27T21:43:30.1386884+05:30 0.781
+C-memory-r100-before upstream pid=10300 2026-11-27T21:43:30.6264890+05:30 4.969
+C-memory-r100-after gateway pid=5940 2026-11-27T21:43:57.1169200+05:30 6.328
+C-memory-r100-after upstream pid=10300 2026-11-27T21:43:57.5958051+05:30 5.031
+```
+
+### Gateway metrics
+
+These are excerpts from the `/metrics` scrape taken after each gateway run. In every scrape before a run, each of
+these counters was 0 or not yet present. The `http_requests_total` series for this path appears only after the
+first request. Each run's counts include its warm-up.
+
+```text
+B-memory-r50-after
+tollgate_http_requests_total{path="/v1/chat/completions",status="200"} 1250
+tollgate_provider_attempts_total{provider="fake-upstream",outcome="ok"} 1250
+tollgate_provider_attempts_total{provider="fake-upstream",outcome="connection"} 0
+tollgate_tokens_reserved_total 28750
+B-memory-r100-after
+tollgate_http_requests_total{path="/v1/chat/completions",status="200"} 2500
+tollgate_provider_attempts_total{provider="fake-upstream",outcome="ok"} 2500
+tollgate_provider_attempts_total{provider="fake-upstream",outcome="connection"} 0
+tollgate_tokens_reserved_total 57500
+C-memory-r100-after
+tollgate_http_requests_total{path="/v1/chat/completions",status="200"} 2500
+tollgate_provider_attempts_total{provider="mock",outcome="ok"} 2500
+tollgate_provider_attempts_total{provider="mock",outcome="connection"} 0
+tollgate_tokens_reserved_total 57500
+```
+
+Every request reached the provider in one successful attempt, with no connection failure.
+
+### Not done
+
+The task's method ends at step 1 when B follows 100/s. For that reason the following were not done:
+
+- the three time-location comparisons (the attempt duration against the request duration, the log median against
+  the report p50, and CPU against the controls), beyond the CPU tables above
+- the `cProfile` run
+- the two variations
+
+The request logs and the full `/metrics` scrapes stay outside the repository.
 
 ## Not run, or not published
 
