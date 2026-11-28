@@ -1,54 +1,100 @@
 # Architecture
 
-**Status:** Phase 3 complete. The app serves `GET /health` and `POST /v1/chat/completions`, which is routed by
-model through a route table to the mock, Ollama, OpenAI or Anthropic provider with ordered fallback, behind API
-key authentication and token-aware rate limiting (tasks T-000 to T-210). With the cache on, it answers a
-request close in meaning to an earlier one from an in-process semantic cache (T-301 to T-307); no similarity
-threshold is recommended, because the one embedding model evaluated found none (`cache-eval.md`).
-Everything in sections 2 to 4 describes the target design, not current code.
-Decisions behind it are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
+**Status:** Phase 4 complete (T-401 to T-409); Phase 5 is documentation only and changes no code. The app serves
+`GET /health` and `POST /v1/chat/completions`, which is routed by model through a route table to the mock,
+Ollama, OpenAI or Anthropic provider with ordered fallback, behind API key authentication and token-aware rate
+limiting (tasks T-000 to T-210). With the cache on, it answers a request close in meaning to an earlier one from
+an in-process semantic cache (T-301 to T-307); no similarity threshold is recommended, because the one embedding
+model evaluated found none (`cache-eval.md`). Every completed request emits one record on the logger
+`tollgate.request`, written as a JSON line when uvicorn runs with `deploy/logging.json`; `GET /metrics` exports
+Prometheus metrics, and a Compose stack runs the gateway with Redis (T-401 to T-405).
+
+Sections 1 to 5 describe parts of the system. Each part is labelled **built** or **not built**, and a part not
+built names the ADR or Backlog item that keeps it out. Section 6 lists working rules, not parts. Decisions
+behind the design are recorded in [DECISIONS.md](DECISIONS.md); work in progress is in [TASKS.md](TASKS.md).
 
 ## 1. Overview
 
 Tollgate is an LLM gateway: one OpenAI-compatible HTTP API in front of several model providers. It adds three
 things that a plain proxy lacks:
 
-- **Token-aware rate limiting.** Limits are counted in tokens per time window, not only requests, per API key.
-- **Model routing.** Each request is sent to a provider and model chosen by explicit rules (cost, size, health).
-- **Semantic caching.** A request that is close in meaning to an earlier one can be answered from the cache.
+- **Token-aware rate limiting** (built). Limits are counted in tokens per minute, not requests, per API key, in
+  memory or in Redis, chosen by `TOLLGATE_LIMITER_BACKEND`.
+- **Model routing** (built). Each request goes to the route for its model alias, else the default route; the
+  route's targets are tried in order, moving on only after a retryable failure (ADR-0010, ADR-0011).
+- **Semantic caching** (built). A request that is close in meaning to an earlier one can be answered from an
+  in-process cache, one per process; it is off by default, and no threshold is recommended (`cache-eval.md`).
+
+Not built:
+
+- Routing by cost, latency, load or health: ADR-0011 defers cost- and latency-based routing and load
+  balancing, and has no health checks.
+- Same-target retries, cooldowns and a request deadline: ADR-0010, ADR-0011; Backlog "Same-target retries,
+  cooldowns and a request deadline".
+- Streaming: `stream: true` is a 400 `unsupported_parameter` (ADR-0004, ADR-0009).
+- A cache shared between processes: ADR-0015; Backlog "Shared semantic cache".
+- A published image and a hosted demo: ADR-0019.
+- TLS: the gateway serves plain HTTP, and a reverse proxy outside this repository would terminate TLS
+  (ADR-0017; Backlog "TLS in front of the gateway").
 
 It is a portfolio project. Every performance or cost claim must come from a reproducible run (see section 6).
 
-## 2. Request flow (target)
+## 2. Request flow (built)
+
+One `POST /v1/chat/completions`, as `app/api/chat.py` runs it. `RequestMiddleware` wraps every request, so a
+completed request is logged and counted whatever its status, after the app has returned.
 
 ```mermaid
 flowchart TB
-  C[Client] --> V[Validate and authenticate]
-  V --> SEL{Select route}
-  SEL -- no route --> R404[404 model_not_found]
-  SEL -- route --> E[Estimate input tokens]
-  E --> RL{Rate limiter<br/>reserve tokens}
-  RL -- over limit --> R429[429 with retry hints]
-  RL -- allowed --> SC{Semantic cache}
-  SC -- hit --> SH[Settle 0:<br/>full refund]
-  SH --> RESP[Response]
-  SC -- miss or skip --> RT[Router]
-  RT --> P[Provider adapter]
-  P --> ST[Settle: actual usage,<br/>cache store, metrics]
-  ST --> RESP
+  C["Client"] --> MW["RequestMiddleware<br/>starts the monotonic timer"]
+  MW --> AUTH{"API key valid?<br/>AuthenticatedRoute, before the body is read"}
+  AUTH -->|"no"| R401(["401 invalid_api_key"])
+  AUTH -->|"yes"| VAL{"Body valid?<br/>ChatRequest"}
+  VAL -->|"no"| R400(["400 invalid_request_error"])
+  VAL -->|"yes"| SEL{"Select route<br/>Router.select"}
+  SEL -->|"no route"| R404(["404 model_not_found<br/>no limit headers"])
+  SEL -->|"route"| EST["reserved_tokens:<br/>input estimate plus completion allowance"]
+  EST --> RES{"RateLimiter.reserve<br/>under the caller id"}
+  RES -->|"refused"| R429(["429 rate_limit_exceeded"])
+  RES -->|"allowed"| CON{"Cache on?"}
+  CON -->|"no"| RUN["run_route: targets in order, each once,<br/>next only after a retryable ProviderError"]
+  CON -->|"yes"| LOOK{"SemanticCache.lookup<br/>under the caller id"}
+  LOOK -->|"Hit"| SH["settle 0: full refund"]
+  SH --> R200H(["200, x-tollgate-cache: hit"])
+  LOOK -->|"Miss or Skip"| RUN
+  RUN -->|"RouteFailed"| SF["settle: full refund,<br/>or as reserved after bad_response"]
+  SF --> R502(["502 provider_error"])
+  RUN -->|"Served"| SS["settle charged_tokens:<br/>usage capped at the bucket capacity"]
+  SS -->|"after a Miss"| STORE["SemanticCache.store"]
+  STORE --> R200(["200, x-tollgate-cache: miss or skip"])
+  SS -->|"Skip or cache off"| R200
+  R401 --> SENT["RequestMiddleware reports once the app returns:<br/>status, duration, ChatRecord"]
+  R400 --> SENT
+  R404 --> SENT
+  R429 --> SENT
+  R200H --> SENT
+  R502 --> SENT
+  R200 --> SENT
+  SENT -->|"first observer"| LOG["log_request: one record<br/>on logger tollgate.request"]
+  SENT -->|"second observer"| MET["request_metrics.observe:<br/>MetricsRegistry, read by GET /metrics"]
 ```
 
-| Stage | Responsibility | Introduced |
-| --- | --- | --- |
-| API layer | `/v1/chat/completions`, `/health`, request and response models, error shape | Phase 0-1 |
-| Providers | Adapters behind one interface: mock, then Ollama, then OpenAI and Anthropic | Phase 1-2 |
-| Token counting | Estimate before the call, settle with the provider's reported usage after | Phase 1 |
-| Rate limiter | Per-key token bucket, state in Redis through redis-py and one Lua script (ADR-0006) | Phase 1 |
-| Router | Route table by model alias (ADR-0011); targets tried in order, each once, moving on only after a retryable failure (ADR-0010); a failed route is refunded, an untranslatable answer charged | Phase 2 |
-| Semantic cache | Looked up after the reservation under the caller id; embedding of the last user message, similarity lookup, thresholds and invalidation; a hit settles 0, and only a `stop` answer of at most 65,536 bytes after a miss is stored (ADR-0014, ADR-0015) | Phase 3 |
-| Operations | A pinned non-root image, a Docker Compose stack (gateway and Redis, Ollama optional) checked in CI, metrics, structured logs, load benchmarks (ADR-0016, ADR-0017) | Phase 4 |
+Not drawn: a handler that raises is reported as a 500 and the exception propagates, and a cancelled request is
+not logged. A 400 or 401 log line has only the base fields, and a 404 or 429 has null chat fields. The app
+installs no log handler: the record becomes a JSON line on stdout only through `deploy/logging.json`.
+`GET /health` and `GET /metrics` pass through the same middleware.
 
-## 3. Core interfaces (target, Phase 1 onwards)
+| Stage | Responsibility | Status |
+| --- | --- | --- |
+| API layer | `/v1/chat/completions`, `/health`, request and response models, error shape | Built (Phase 0-1) |
+| Providers | Adapters behind one interface: mock, then Ollama, then OpenAI and Anthropic | Built (Phase 1-2) |
+| Token counting | Estimate before the call, settle with the provider's reported usage after | Built (Phase 1) |
+| Rate limiter | Per-key token bucket, in memory (the default) or in Redis through redis-py and one Lua script (ADR-0006) | Built (Phase 1) |
+| Router | Route table by model alias (ADR-0011); targets tried in order, each once, moving on only after a retryable failure (ADR-0010); a failed route is refunded, an untranslatable answer charged | Built (Phase 2) |
+| Semantic cache | Looked up after the reservation under the caller id; embedding of the last user message, a similarity threshold, expiry after `TOLLGATE_CACHE_TTL_SECONDS` and eviction at `TOLLGATE_CACHE_MAX_ENTRIES`; a hit settles 0, and only a `stop` answer of at most 65,536 bytes after a miss is stored (ADR-0014, ADR-0015) | Built (Phase 3) |
+| Operations | A pinned non-root image, a Docker Compose stack (gateway and Redis, Ollama optional) checked in CI, metrics, structured logs, load benchmarks (ADR-0016, ADR-0017, ADR-0018) | Built (Phase 4) |
+
+## 3. Core interfaces (built)
 
 Names are final once an ADR or task card fixes them. `Clock`, `Provider`, `TokenEstimator`,
 `reserved_tokens`, `Decision` and `RateLimiter` are final (tasks T-101 to T-105); `ProviderError`,
@@ -145,46 +191,118 @@ class SemanticCache(Protocol):
 
 Interface changes require an ADR.
 
-## 4. External contract
+## 4. External contract (built)
 
 The public HTTP API is OpenAI-compatible for chat completions (ADR-0004). A snapshot of the generated OpenAPI
 document is committed, and a test fails when it changes unless the task allows it (task T-004). This is the
 project's equivalent of a frozen baseline: callers can rely on the contract, and a change to it is always
 deliberate.
 
-## 5. Repository layout
+## 5. Repository layout (built)
 
 | Path | Contents | Committed |
 | --- | --- | --- |
-| `app/` | Gateway code | yes |
+| `app/` | Gateway code (section 5.2) | yes |
 | `tests/` | Unit, integration and contract tests; no network access | yes |
-| `scripts/` | Cross-platform helper scripts, such as `check.py`, `eval_cache.py` (the cache eval run), `fake_upstream.py` (a fake OpenAI-compatible upstream with a fixed delay), `bench_load.py` (the fixed-rate load runner and its report, ADR-0018) and `bench_cache.py` (the cache scan and embedding latency benchmarks, ADR-0018) | yes |
+| `scripts/` | Cross-platform helper scripts: `check.py` (the one check command), `eval_cache.py` (the cache eval run), `regenerate_openapi.py` (the only writer of the contract snapshot, run only when a card changes the contract), `smoke_container.py` (the CI `container` job's smoke checks), and the benchmark scripts: `fake_upstream.py` (a fake OpenAI-compatible upstream with a fixed delay), `bench_load.py` (the fixed-rate load runner and its report, ADR-0018) and `bench_cache.py` (the cache scan and embedding latency benchmarks, ADR-0018) | yes |
 | `eval/` | Fixed datasets for measurements: `cache_pairs.json`, the cache eval pairs | yes |
-| `deploy/` | Deployment files: `logging.json` (the `uvicorn --log-config` file), `routes.compose.json` (the Compose route table, mock provider only) and `bench/` (the load benchmark's route tables: `routes.fake-upstream.json` for scenario B, `routes.mock.json` for scenario C) | yes |
+| `deploy/` | Deployment files: `logging.json` (the `uvicorn --log-config` file, copied into the image), `routes.compose.json` (the Compose route table, mock provider only, mounted read-only) and `bench/` (the load benchmark's route tables: `routes.fake-upstream.json` for scenario B, `routes.mock.json` for scenario C) | yes |
 | `Dockerfile`, `.dockerignore`, `compose.yaml` | The gateway image and the one-host stack (section 5.1) | yes |
-| `docs/` | Architecture, decisions, tasks, setup | yes |
+| `docs/` | `ARCHITECTURE.md`, `DECISIONS.md`, `TASKS.md`, `setup.md`, `cache-eval.md`, `benchmarks.md` with `benchmarks/` (the committed JSON run reports), `findings.md` and `routes.example.json` | yes |
+| `pyproject.toml`, `requirements.txt`, `requirements-dev.txt` | Tool configuration and the pinned runtime and dev dependencies; `requirements.txt` is installed into the image | yes |
+| `README.md`, `LICENSE`, `.gitignore`, `.gitattributes` | Project front page, licence and Git settings | yes |
 | `.githooks/` | Commit guards (identity, message, blocked files); need Node.js | yes |
-| `.github/workflows/` | CI | yes |
+| `.github/workflows/` | CI: `ci.yml`, with the `lint and test` job and the `container` job (section 5.1) | yes |
 | `.venv/` | Local virtual environment | no |
 
-### 5.1 Image and deployment target (ADR-0017)
+### 5.1 Image and deployment target (built; ADR-0017, ADR-0019)
 
-- **Image.** Multi-stage `Dockerfile` on `python:3.13-slim` pinned by digest. `/app` holds `.venv`, `app/` and
-  `deploy/logging.json` only; `.dockerignore` excludes everything except those inputs. It runs as uid 10001 and
-  starts uvicorn in exec form, so uvicorn is PID 1 and receives SIGTERM, with one worker.
-- **Compose stack.** `gateway` (Redis limiter, `/health` healthcheck, published on `127.0.0.1:8000` only) and
-  `redis` (`redis:7.4.12`, no published port). `TOLLGATE_API_KEYS` and `TOLLGATE_METRICS_TOKEN` are required
-  `${VAR:?...}` references, never written in the file. The route table is mounted read-only at
+- **Image** (built). Multi-stage `Dockerfile` on `python:3.13-slim` pinned by digest. `/app` holds `.venv`,
+  `app/` and `deploy/logging.json` only; `.dockerignore` excludes everything except those inputs. It runs as uid
+  10001 and starts uvicorn in exec form, so uvicorn is PID 1 and receives SIGTERM, with one worker.
+- **Compose stack** (built). `gateway` (Redis limiter, `/health` healthcheck, published on `127.0.0.1:8000`
+  only) and `redis` (`redis:7.4.12`, no published port). `TOLLGATE_API_KEYS` and `TOLLGATE_METRICS_TOKEN` are
+  required `${VAR:?...}` references, never written in the file. The route table is mounted read-only at
   `/config/routes.json`, outside `/app`. An `ollama` service sits in the `ollama` profile, off by default.
-- **CI.** The `container` job lints the `Dockerfile` with hadolint, builds and starts the stack, runs
+- **CI** (built). The `container` job lints the `Dockerfile` with hadolint, builds and starts the stack, runs
   `scripts/smoke_container.py`, and checks Redis keys, the JSON log line, the non-root user, the contents of
   `/app` and a graceful stop. Its key and token are random per run.
-- **Deployment target.** One host running this stack, one gateway process per container. More gateway
-  containers need `TOLLGATE_LIMITER_BACKEND=redis`; the cache and the metrics stay per process. The gateway
-  serves no TLS; a reverse proxy outside this repository terminates it. No hosted deployment in Phase 4.
+- **Deployment target** (built). One host running this stack, one gateway process per container. More gateway
+  containers need `TOLLGATE_LIMITER_BACKEND=redis`; the cache and the metrics stay per process.
+- **Not built:** a hosted deployment and a published image (ADR-0019), and TLS: the gateway serves plain HTTP,
+  and a reverse proxy outside this repository would terminate TLS (ADR-0017).
 
-Package layout inside `app/` is decided per phase. Current: `app/api/` (request and response models, the error
-body and handler, API key authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
+The deployment, as `compose.yaml`, the `Dockerfile` and `deploy/` define it. Prometheus is not part of the
+stack: it is drawn dashed because only the gateway's `/metrics` route exists for it to scrape.
+
+```mermaid
+flowchart LR
+  CLIENT["Client on the host"]
+  subgraph STACK["docker compose stack on the same host, compose.yaml"]
+    GW["gateway container<br/>built from the Dockerfile<br/>uid 10001, not root<br/>one uvicorn process on port 8000"]
+    RD[("redis:7.4.12<br/>no published port")]
+    OL["ollama/ollama:0.40.17<br/>profile ollama, off by default"]
+    RF["deploy/routes.compose.json<br/>mock provider only"]
+    OUT["container stdout<br/>JSON log lines"]
+  end
+  PROM["Prometheus<br/>outside the stack"]
+  CLIENT -->|"127.0.0.1:8000 only"| GW
+  RF -->|"mounted read-only at /config/routes.json"| GW
+  GW -->|"token buckets at redis://redis:6379/0"| RD
+  GW -.->|"only if a route or the cache embedder points at http://ollama:11434"| OL
+  GW -->|"deploy/logging.json, JsonFormatter"| OUT
+  PROM -.->|"GET /metrics with TOLLGATE_METRICS_TOKEN"| GW
+  classDef outside stroke-dasharray: 5 5
+  class PROM outside
+```
+
+In the stack as committed, the route table names only the mock provider and no cache variable is set, so the
+gateway calls no upstream and the cache is off; Ollama is used only after a route or the cache is pointed at it.
+
+### 5.2 Package layout and runtime behaviour (built)
+
+The six packages and three top-level modules of `app/`, with each arrow pointing the way an import goes.
+
+```mermaid
+flowchart TB
+  MAIN["app/main.py"] --> API["app/api"]
+  MAIN --> CACHE["app/cache"]
+  MAIN --> CLOCK["app/clock.py"]
+  MAIN --> LIMITS["app/limits"]
+  MAIN --> OBS["app/observability"]
+  MAIN --> PROVIDERS["app/providers"]
+  MAIN --> ROUTING["app/routing"]
+  MAIN --> SETTINGS["app/settings.py"]
+  API --> CACHE
+  API --> CLOCK
+  API --> LIMITS
+  API --> OBS
+  API --> PROVIDERS
+  API --> ROUTING
+  CACHE --> API
+  CACHE --> CLOCK
+  CACHE --> PROVIDERS
+  LIMITS --> API
+  LIMITS --> CLOCK
+  OBS --> API
+  OBS --> CLOCK
+  OBS --> ROUTING
+  PROVIDERS --> API
+  PROVIDERS --> CLOCK
+  PROVIDERS --> ROUTING
+  ROUTING --> API
+  ROUTING --> CLOCK
+  ROUTING --> PROVIDERS
+  SETTINGS --> ROUTING
+```
+
+The arrows into `app/api` from `cache`, `limits`, `providers` and `routing` import only `app/api/models.py`
+(`ChatRequest`, `ChatResponse` and the types they hold); `observability` imports `app/api/auth.py` and
+`app/api/errors.py` for `/metrics`. `providers` imports `routing` only for `DEFAULT_MAX_RESPONSE_BYTES`
+(`app/routing/config.py`). No import is made only for type checking.
+
+The modules in each package: `app/api/` (request and response models, the error body and handler, API key
+authentication, the rate-limit headers in `limit_headers.py`, the chat router) and
 `app/providers/` (the `Provider` protocol, `MockProvider`, `ProviderError` with its failure kinds in
 `errors.py`, the Ollama adapter `OllamaProvider` in `ollama.py`, the OpenAI adapter `OpenAIProvider` in
 `openai.py`, the Anthropic adapter `AnthropicProvider` in `anthropic.py`, `fields.py`: the reply checks the
@@ -203,8 +321,9 @@ semantic cache: `embedder.py` (the `Embedder` protocol and `EmbeddingError`), `o
 baseline for tests and the eval, never selectable at run time), `semantic.py` (`SemanticCache`, `Hit`, `Miss`,
 `Skip`, `Ticket`, `partition_key` and `InMemorySemanticCache`: partitions, a `math.sumprod` scan, expiry and
 eviction) and `evaluation.py`, the eval harness that measures hit and wrong-hit rates on
-`eval/cache_pairs.json` (`docs/cache-eval.md`). `app/observability/` holds the request log (ADR-0016):
-`record.py`, `middleware.py` and `logs.py`, described below.
+`eval/cache_pairs.json` (`docs/cache-eval.md`). `app/observability/` holds the request log and the metrics
+(ADR-0016): `record.py`, `middleware.py` and `logs.py` for the log, and `metrics.py` (`MetricsRegistry` and the
+text format), `request_metrics.py` and `endpoint.py` (`GET /metrics`) for the metrics, described below.
 The OpenAPI document omits FastAPI's automatic 422, because the
 API answers 400 (ADR-0008), so `create_app()` builds a small `FastAPI` subclass that strips it. Authentication
 has two parts: the chat router's `AuthenticatedRoute` checks the key before the body is read, so a caller
